@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import Integer, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -39,19 +39,20 @@ async def overview(
     ).one()
     hits = (
         await session.execute(
-            select(func.count(), func.coalesce(func.sum(func.cast(UsageEvent.hit, int)), 0)).where(
-                UsageEvent.created_at >= since, UsageEvent.type == "chat"
-            )
+            select(
+                func.count(),
+                func.coalesce(func.sum(cast(UsageEvent.hit, Integer)), 0),
+            ).where(UsageEvent.created_at >= since, UsageEvent.type == "chat")
         )
     ).one()
-    total_chats, no_answer = int(hits[0] or 0), int(hits[1] or 0)
+    total_chats, hit_count = int(hits[0] or 0), int(hits[1] or 0)
 
     async def count(model, *conds) -> int:
         return int(
             await session.scalar(select(func.count()).select_from(model).where(*conds)) or 0
         )
 
-    hit_rate = (no_answer / total_chats) if total_chats else 0.0
+    hit_rate = (hit_count / total_chats) if total_chats else 0.0
     return DashboardOverview(
         total_chats=total_chats,
         total_tokens_in=int(stats[1] or 0),
@@ -74,6 +75,8 @@ async def timeseries(
     session: AsyncSession = Depends(get_session),
 ):
     since = _since(days)
+    # GROUP BY 1：asyncpg 会把 'day' 参数化，SELECT/GROUP BY 里的
+    # date_trunc 表达式因占位符序号不同文本不等价，PG 判定未分组（SQLite 宽松测不出）
     rows = (
         await session.execute(
             select(
@@ -84,8 +87,8 @@ async def timeseries(
                 ),
             )
             .where(UsageEvent.created_at >= since, UsageEvent.type == "chat")
-            .group_by(func.date_trunc("day", UsageEvent.created_at))
-            .order_by(func.date_trunc("day", UsageEvent.created_at))
+            .group_by(text("1"))
+            .order_by(text("1"))
         )
     ).all()
     return [TimeseriesPoint(date=r[0], chats=int(r[1]), tokens=int(r[2] or 0)) for r in rows]

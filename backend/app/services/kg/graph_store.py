@@ -187,14 +187,15 @@ class PGGraphStore(GraphStore):
                 WITH RECURSIVE walk AS (
                     SELECT id, 0 AS depth FROM entities WHERE id IN :seed_ids
                     UNION
-                    SELECT r.target_entity_id, w.depth + 1
+                    -- 单一递归成员：PG 只允许一个递归项（SQLite 的多递归成员写法在 PG 报错），
+                    -- 正/反向邻居用 CASE 统一取对端
+                    SELECT CASE WHEN r.source_entity_id = w.id
+                                THEN r.target_entity_id
+                                ELSE r.source_entity_id END AS id,
+                           w.depth + 1
                     FROM walk w
-                    JOIN relations r ON r.source_entity_id = w.id
-                    WHERE w.depth < :hops AND r.kb_id = :kb_id
-                    UNION
-                    SELECT r.source_entity_id, w.depth + 1
-                    FROM walk w
-                    JOIN relations r ON r.target_entity_id = w.id
+                    JOIN relations r
+                      ON (r.source_entity_id = w.id OR r.target_entity_id = w.id)
                     WHERE w.depth < :hops AND r.kb_id = :kb_id
                 )
                 SELECT DISTINCT id FROM walk LIMIT :limit

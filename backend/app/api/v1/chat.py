@@ -78,7 +78,7 @@ async def chat_stream(
     )
     history = [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
-    async def sse(event: dict) -> str:
+    def sse(event: dict) -> str:
         return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     async def event_stream() -> AsyncGenerator[str, None]:

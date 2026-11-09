@@ -47,8 +47,43 @@ NexusRAG 帮你把一堆文档，变成一个**可被检索、可溯源、可量
 ```bash
 cp .env.example .env      # 编辑 .env：填入 LLM_API_KEY / EMBEDDING_API_KEY
 docker compose up -d      # 首次启动自动建表 + 创建管理员
-open http://localhost:8000 # 控制台（默认账号见 .env 中 ADMIN_EMAIL/ADMIN_PASSWORD）
+open http://localhost:3001 # 控制台（默认账号见 .env 中 ADMIN_EMAIL/ADMIN_PASSWORD）
 ```
+
+> 还没有 LLM API Key？`cd backend && python scripts/mock_llm.py` 会启动一个
+> OpenAI 协议兼容的本地 mock 服务（127.0.0.1:9999，确定性向量 + 固定回答），
+> `.env` 里把 `LLM_API_BASE` / `EMBEDDING_API_BASE` 指向
+> `http://host.docker.internal:9999/v1` 即可先跑通全链路再接真模型。
+
+<details>
+<summary>🇨🇳 国内网络部署指引（镜像拉取 / 依赖安装慢看这里）</summary>
+
+1. **基础镜像预拉**：BuildKit 构建时拉基础镜像常走 `auth.docker.io`（易受 DNS 污染影响）。
+   推荐先用 daemon 直接预拉（daemon 走 `registry-mirrors`，成功率高），构建即命中本地缓存：
+
+   ```bash
+   docker pull postgres:16-alpine
+   docker pull qdrant/qdrant:latest
+   docker pull redis:7-alpine
+   docker pull python:3.11-slim
+   docker pull node:20-alpine
+   docker pull nginx:1.25-alpine
+   ```
+
+   daemon 镜像源可在 Docker Desktop → Settings → Docker Engine 中配置（如
+   `https://docker.1ms.run`、`https://docker.m.daocloud.io`）。
+
+2. **Python 依赖**：backend 镜像已内置清华 PyPI 源（`PIP_INDEX_URL`），无需额外配置。
+
+3. **前端依赖**：镜像内 `pnpm install` 走 npm 官方源；如遇 pnpm 10+ 的
+   `ERR_PNPM_TARBALL_URL_MISMATCH`（lockfile 内镜像站 URL 与官方元数据校验冲突），
+   为已知供应链校验限制，仓库构建流程已通过忽略 lockfile 规避。
+
+4. **端口**：web 控制台固定映射 `3001`（3000 端口常与本机其他 dev server 冲突）。
+   若 3001 也被占用，改 `docker-compose.yml` 中 web 的 `ports` 后 `docker compose up -d web`。
+
+</details>
+
 
 ### 本机开发
 
