@@ -7,10 +7,10 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import bindparam, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.db.session import get_session
+from app.db.session import session_scope
 from app.models.kb import ChunkEntity, Entity, Relation
 from app.services.kg.extractor import Triple
 
@@ -79,21 +79,22 @@ class PGGraphStore(GraphStore):
     def _sessions(self):
         if self._session_factory is not None:
             return self._session_factory()
-        from contextlib import asynccontextmanager
+        return session_scope()
 
-        @asynccontextmanager
-        async def _ctx():
-            async for s in get_session():
-                yield s
+    @staticmethod
+    def _insert(session, table):
+        """按方言返回 insert 构造器（PG / SQLite 均 upsert，便于本地集成测试）。"""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-        return _ctx()
+        name = session.bind.dialect.name if session.bind is not None else "postgresql"
+        return (pg_insert if name == "postgresql" else sqlite_insert)(table)
 
     async def _get_or_create_entity(self, session, kb_id, name, etype) -> tuple[uuid.UUID, bool]:
         norm = normalize_name(name)
         stmt = (
-            pg_insert(Entity)
+            self._insert(session, Entity)
             .values(kb_id=kb_id, name=name, type=etype, norm_name=norm)
-            .on_conflict_do_nothing(constraint="uq_entities_kb_norm_type")
+            .on_conflict_do_nothing(index_elements=["kb_id", "norm_name", "type"])
             .returning(Entity.id)
         )
         result = await session.execute(stmt)
@@ -127,7 +128,7 @@ class PGGraphStore(GraphStore):
                 new_entities += int(created)
 
                 rel_stmt = (
-                    pg_insert(Relation)
+                    self._insert(session, Relation)
                     .values(
                         kb_id=kb_id,
                         source_entity_id=src_id,
@@ -136,7 +137,9 @@ class PGGraphStore(GraphStore):
                         evidence_chunk_id=evidence_chunk_id,
                     )
                     .on_conflict_do_update(
-                        constraint="uq_relations_triple",
+                        index_elements=[
+                            "kb_id", "source_entity_id", "predicate", "target_entity_id",
+                        ],
                         set_={"weight": Relation.weight + 1},
                     )
                     .returning(Relation.id)
@@ -147,14 +150,14 @@ class PGGraphStore(GraphStore):
 
                 if evidence_chunk_id:
                     await session.execute(
-                        pg_insert(ChunkEntity)
+                        self._insert(session, ChunkEntity)
                         .values(chunk_id=evidence_chunk_id, entity_id=src_id)
-                        .on_conflict_do_nothing(constraint="uq_chunk_entities")
+                        .on_conflict_do_nothing(index_elements=["chunk_id", "entity_id"])
                     )
                     await session.execute(
-                        pg_insert(ChunkEntity)
+                        self._insert(session, ChunkEntity)
                         .values(chunk_id=evidence_chunk_id, entity_id=tgt_id)
-                        .on_conflict_do_nothing(constraint="uq_chunk_entities")
+                        .on_conflict_do_nothing(index_elements=["chunk_id", "entity_id"])
                     )
             await session.commit()
         return new_entities, new_relations
@@ -165,17 +168,24 @@ class PGGraphStore(GraphStore):
         if not seed_entity_names:
             return SubGraph()
         hops = max(1, min(hops, 3))
+        norm_names = [normalize_name(n) for n in seed_entity_names]
         async with self._sessions() as session:
+            # seed 实体：标准 IN 查询（PG/SQLite 通吃）
+            seed_rows = (
+                await session.execute(
+                    select(Entity.id)
+                    .where(Entity.kb_id == kb_id, Entity.norm_name.in_(norm_names))
+                    .limit(20)
+                )
+            ).all()
+            if not seed_rows:
+                return SubGraph()
+            seed_ids = [r[0] for r in seed_rows]
+
             sql = text(
                 """
-                WITH RECURSIVE seed AS (
-                    SELECT id FROM entities
-                    WHERE kb_id = :kb_id
-                      AND norm_name = ANY(CAST(:names AS text[]))
-                    LIMIT 20
-                ),
-                walk AS (
-                    SELECT e.id, 0 AS depth FROM entities e WHERE e.id IN (SELECT id FROM seed)
+                WITH RECURSIVE walk AS (
+                    SELECT id, 0 AS depth FROM entities WHERE id IN :seed_ids
                     UNION
                     SELECT r.target_entity_id, w.depth + 1
                     FROM walk w
@@ -189,18 +199,19 @@ class PGGraphStore(GraphStore):
                 )
                 SELECT DISTINCT id FROM walk LIMIT :limit
                 """
-            )
-            norm_names = [normalize_name(n) for n in seed_entity_names]
+            ).bindparams(bindparam("seed_ids", expanding=True))
             result = await session.execute(
                 sql,
                 {
-                    "kb_id": str(kb_id),
-                    "names": norm_names,
+                    # uuid 用 32 位 hex：sqlite 端 Uuid 以 CHAR(32) 存储，PG 端两种格式均可
+                    "seed_ids": [i.hex for i in seed_ids],
                     "hops": hops,
+                    "kb_id": kb_id.hex,
                     "limit": limit,
                 },
             )
-            ids = [row[0] for row in result]
+            # 原生 SQL 返回 hex 字符串（sqlite）或 uuid 对象（PG），统一转回 UUID
+            ids = [uuid.UUID(str(row[0])) for row in result]
             if not ids:
                 return SubGraph()
 

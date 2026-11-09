@@ -10,7 +10,6 @@ from app.core.security import decode_token, hash_api_key
 from app.db.session import get_session
 from app.models.app import App
 from app.models.platform import ApiKey, User
-from app.models.platform import User
 
 
 async def get_current_user(

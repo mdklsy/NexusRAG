@@ -50,7 +50,7 @@ def _build_messages(
 
 async def _classify_intent(llm, question: str) -> str:
     try:
-        raw, _ = await llm.chat_json(
+        raw = await llm.chat_json(
             [{"role": "user", "content": INTENT_PROMPT.format(message=question)}],
             max_tokens=50,
         )

@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select, update
 
 from app.core.config import get_settings
-from app.db.session import get_session
+from app.db.session import session_scope
 from app.models.kb import Chunk, Document, KnowledgeBase, Relation
 from app.services.ingestion.chunkers import chunk_text, estimate_tokens
 from app.services.ingestion.parsers import ParseError, fetch_url, parse_bytes
@@ -22,7 +22,7 @@ EMBED_BATCH_SIZE = 32
 
 
 async def _set_document_status(document_id: uuid.UUID, status: str, error: str | None = None):
-    async with get_session() as session:
+    async with session_scope() as session:
         await session.execute(
             update(Document)
             .where(Document.id == document_id)
@@ -42,7 +42,7 @@ async def _read_source_text(document: Document) -> str:
 
 async def ingest_document(document_id: uuid.UUID) -> None:
     """文档摄取全流程。任何阶段失败都会把文档置为 failed。"""
-    async with get_session() as session:
+    async with session_scope() as session:
         doc = await session.get(Document, document_id)
         if doc is None:
             return
@@ -84,7 +84,7 @@ async def ingest_document(document_id: uuid.UUID) -> None:
                 }
                 for r in batch
             ]
-            async with get_session() as session:
+            async with session_scope() as session:
                 for cid, r, _vec in zip(chunk_ids, batch, vectors, strict=True):
                     session.add(
                         Chunk(
@@ -106,7 +106,7 @@ async def ingest_document(document_id: uuid.UUID) -> None:
         llm = get_llm_client()
         graph = get_graph_store()
         # 重新查出已入库的 chunk（按顺序），保证 evidence_chunk_id 正确
-        async with get_session() as session:
+        async with session_scope() as session:
             chunk_rows = (
                 (
                     await session.execute(
@@ -123,7 +123,7 @@ async def ingest_document(document_id: uuid.UUID) -> None:
                 await graph.save_triples(kb.id, triples, evidence_chunk_id=chunk_id)
 
         # ---------- 5. 完成 ----------
-        async with get_session() as session:
+        async with session_scope() as session:
             chunk_count = await session.scalar(
                 select(func.count())
                 .select_from(Chunk)
@@ -151,7 +151,7 @@ async def ingest_document(document_id: uuid.UUID) -> None:
 
 async def purge_document(document_id: uuid.UUID) -> None:
     """删除文档的全部痕迹：向量、分块、KG 证据、计数。"""
-    async with get_session() as session:
+    async with session_scope() as session:
         doc = await session.get(Document, document_id)
         if doc is None:
             return

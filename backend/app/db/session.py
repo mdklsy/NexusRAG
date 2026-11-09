@@ -1,6 +1,7 @@
 """异步数据库会话。"""
 
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -28,6 +29,15 @@ def get_engine():
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI Depends 用。"""
+    get_engine()
+    async with _session_factory() as session:
+        yield session
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncGenerator[AsyncSession, None]:
+    """服务层/脚本用：async with session_scope() as session。"""
     get_engine()
     async with _session_factory() as session:
         yield session

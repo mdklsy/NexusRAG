@@ -75,7 +75,7 @@ async def extract_triples(llm: LLMClient, chunk_text: str) -> list[Triple]:
     """对单个 chunk 抽取三元组。"""
     if len(chunk_text) < 30:
         return []
-    raw, _ = await llm.chat_json(
+    raw = await llm.chat_json(
         [{"role": "user", "content": EXTRACT_PROMPT.format(chunk=chunk_text[:3000])}],
         max_tokens=2048,
     )

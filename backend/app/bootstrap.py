@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.security import hash_password
-from app.db.session import get_session
+from app.db.session import session_scope
 from app.models.platform import User
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 async def bootstrap() -> None:
     s = get_settings()
-    async with get_session() as session:
+    async with session_scope() as session:
         existing = await session.execute(select(User).where(User.email == s.admin_email))
         if existing.scalar_one_or_none() is None:
             session.add(
