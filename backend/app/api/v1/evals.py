@@ -1,6 +1,5 @@
 """评测路由：评测集 CRUD + 运行 + 结果查询。"""
 
-import asyncio
 import logging
 import uuid
 
@@ -127,26 +126,10 @@ async def run_eval_set(
     await session.commit()
     await session.refresh(run)
 
-    # 派发：优先 ARQ，失败回退进程内
-    dispatched = False
-    try:
-        from arq import create_pool
-        from arq.connections import RedisSettings
+    # 派发：优先 ARQ（短超时），失败回退进程内
+    from app.core.tasks import dispatch_eval
 
-        from app.core.config import get_settings
-
-        pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
-        try:
-            await pool.enqueue_job("task_run_eval", str(run.id))
-            dispatched = True
-        finally:
-            await pool.aclose()
-    except Exception as e:  # noqa: BLE001
-        logger.info("ARQ unavailable (%s), eval runs inline", e)
-    if not dispatched:
-        from app.services.evaluator import run_eval
-
-        asyncio.create_task(run_eval(run.id))
+    await dispatch_eval(run.id)
     return run
 
 
