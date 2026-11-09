@@ -56,7 +56,8 @@ open http://localhost:8000 # 控制台（默认账号见 .env 中 ADMIN_EMAIL/AD
 cd backend
 python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-alembic upgrade head
+alembic upgrade head       # 需要 PostgreSQL（见 .env.example DATABASE_URL）
+python -m app.bootstrap    # 创建初始管理员
 uvicorn app.main:app --reload --port 8000
 
 # 前端（Node 18+）
@@ -64,6 +65,10 @@ cd frontend
 pnpm install
 pnpm dev       # http://localhost:5173，代理到后端 8000
 ```
+
+> **Windows 本机开发提示**：若公司/系统代理拦截了对 LLM API 的出站请求（症状：摄取文档
+> failed 且错误含 `502`），给终端设置 `set no_proxy=*`（Git Bash: `export no_proxy='*'`）后重启服务。
+> 测试：`cd backend && pytest`（无需任何外部服务，内置 sqlite + 内存向量库 + Fake LLM）。
 
 ### 5 分钟跑通第一个应用
 
