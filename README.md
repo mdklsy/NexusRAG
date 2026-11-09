@@ -114,6 +114,11 @@ curl -N http://localhost:8000/api/v1/chat/stream \
 
 详见 [docs/architecture.md](docs/architecture.md) 与 [docs/roadmap.md](docs/roadmap.md)。
 
+## 真实集成案例
+
+- [极速图片工坊（微信小程序）](docs/integration-miniprogram.md) — 小程序 SDK 接入全流程
+- [（Web 管理台）](docs/integration-web.md) — 业务 API 注册为工具，LLM 自动查询业务数据（function calling）
+
 ## 路线图
 
 - [x] 一期：核心 RAG + 轻量 KG + 控制台 + 数据看板 + 开放 API

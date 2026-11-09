@@ -114,14 +114,18 @@ def execute_http_tool(tool: Tool, args: dict) -> str:
         headers.setdefault("Content-Type", "application/json")
         payload = json.dumps(payload, ensure_ascii=False)
     try:
-        resp = httpx.request(
-            method,
-            url,
-            params=args.get("query") or None,
-            content=payload,
-            headers=headers,
-            timeout=float(cfg.get("timeout") or 15),
-        )
+        # 业务 API 多为内网地址：默认绕过系统代理直连（trust_env=False），
+        # 需要代理的场景在工具 config.proxy 显式指定
+        with httpx.Client(
+            trust_env=False, proxy=cfg.get("proxy") or None, timeout=float(cfg.get("timeout") or 15)
+        ) as client:
+            resp = client.request(
+                method,
+                url,
+                params=args.get("query") or None,
+                content=payload,
+                headers=headers,
+            )
     except httpx.HTTPError as e:
         raise ToolError(f"请求失败: {e}") from e
 
