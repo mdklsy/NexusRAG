@@ -1,6 +1,13 @@
 """ORM 模型汇总导出。Alembic autogenerate 依赖此文件的导入。"""
 
-from app.models.app import App, AppKnowledgeBase, Conversation, Message, UsageEvent
+from app.models.app import (
+    App,
+    AppKnowledgeBase,
+    Conversation,
+    Message,
+    Tool,
+    UsageEvent,
+)
 from app.models.kb import (
     Chunk,
     ChunkEntity,
@@ -16,6 +23,7 @@ __all__ = [
     "ApiKey",
     "App",
     "AppKnowledgeBase",
+    "Tool",
     "Conversation",
     "Message",
     "UsageEvent",

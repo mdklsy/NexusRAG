@@ -31,6 +31,8 @@ DEFAULT_RETRIEVAL_CONFIG = {
     "history_window": 6,
     "intent_route": True,
 }
+DEFAULT_WIDGET_CONFIG = {"title": "", "welcome": "", "theme": "#1677ff", "bubble": "💬"}
+DEFAULT_TOOL_CONFIG = {"timeout": 15}
 
 
 class App(TenantMixin, TimestampMixin, Base):
@@ -47,7 +49,39 @@ class App(TenantMixin, TimestampMixin, Base):
     retrieval_config: Mapped[dict] = mapped_column(
         JSONType, default=DEFAULT_RETRIEVAL_CONFIG
     )
+    widget_config: Mapped[dict] = mapped_column(
+        JSONType, default=DEFAULT_WIDGET_CONFIG
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Tool(TimestampMixin, Base):
+    """业务系统连接器：LLM 通过 function calling 调用。
+
+    type = http_api：config = {method, url, headers{}, timeout}
+                          LLM args = {path_params{}, query{}, body{}}
+    type = sql_db  ：config = {dsn, timeout}（仅允许 SELECT）
+                          LLM args = {sql}
+    """
+
+    __tablename__ = "tools"
+    __table_args__ = (UniqueConstraint("app_id", "name", name="uq_tools_app_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("apps.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))  # 同时作为 function name（slug 化）
+    display_name: Mapped[str] = mapped_column(String(200), default="")
+    description: Mapped[str] = mapped_column(Text, default="")  # LLM 看到的用途说明
+    type: Mapped[str] = mapped_column(String(20))  # http_api | sql_db
+    config: Mapped[dict] = mapped_column(JSONType, default=DEFAULT_TOOL_CONFIG)
+    parameters_schema: Mapped[dict] = mapped_column(
+        JSONType, default=dict
+    )  # JSON Schema，空则按类型自动生成
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class AppKnowledgeBase(Base):

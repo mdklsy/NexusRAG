@@ -128,7 +128,220 @@ function ConfigForm({
           </Space>
         </Col>
       </Row>
+
+      <Typography.Title level={5}>网页挂件</Typography.Title>
+      <Row gutter={12}>
+        <Col span={8}>
+          <Form.Item name={["widget_config", "title"]} label="挂件标题" noStyle>
+            <Input placeholder="智能客服" />
+          </Form.Item>
+        </Col>
+        <Col span={8}>
+          <Form.Item name={["widget_config", "theme"]} label="主题色" noStyle>
+            <Input placeholder="#1677ff" />
+          </Form.Item>
+        </Col>
+        <Col span={4}>
+          <Form.Item name={["widget_config", "bubble"]} label="按钮图标" noStyle>
+            <Input placeholder="💬" />
+          </Form.Item>
+        </Col>
+        <Col span={24}>
+          <Form.Item name={["widget_config", "welcome"]} label="欢迎语" noStyle>
+            <Input placeholder="你好，请问有什么可以帮你？" />
+          </Form.Item>
+        </Col>
+      </Row>
     </Form>
+  );
+}
+
+/** 业务工具（连接器）管理：编辑抽屉内使用 */
+function ToolsSection({ appId }: { appId: string }) {
+  const qc = useQueryClient();
+  const [editingTool, setEditingTool] = useState<any | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form] = Form.useForm();
+
+  const { data: tools } = useQuery({
+    queryKey: ["tools", appId],
+    queryFn: () => api.get<any[]>(`/api/v1/apps/${appId}/tools`),
+  });
+
+  const save = useMutation({
+    mutationFn: (values: any) => {
+      const { id, ...rest } = values;
+      return id
+        ? api.put(`/api/v1/apps/${appId}/tools/${id}`, rest)
+        : api.post(`/api/v1/apps/${appId}/tools`, rest);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tools", appId] });
+      setEditingTool(null);
+      setCreating(false);
+      message.success("工具已保存");
+    },
+    onError: (e: any) => message.error(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.del(`/api/v1/apps/${appId}/tools/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tools", appId] }),
+  });
+
+  const openForm = (tool?: any) => {
+    form.resetFields();
+    if (tool) {
+      setEditingTool(tool);
+      form.setFieldsValue({ ...tool, config: tool.config });
+    } else {
+      setCreating(true);
+      form.setFieldValue("type", "http_api");
+    }
+  };
+
+  return (
+    <>
+      <Typography.Title level={5}>
+        业务工具（LLM 可调用你的业务系统）
+      </Typography.Title>
+      <Table
+        rowKey="id"
+        size="small"
+        dataSource={tools || []}
+        pagination={false}
+        locale={{ emptyText: "未配置工具。添加 HTTP API 或只读 SQL 查询，让助手能查业务数据。" }}
+        columns={[
+          { title: "名称", dataIndex: "name" },
+          {
+            title: "类型",
+            dataIndex: "type",
+            width: 90,
+            render: (v) => <Tag>{v === "http_api" ? "HTTP API" : "SQL 只读"}</Tag>,
+          },
+          { title: "说明", dataIndex: "description", ellipsis: true },
+          {
+            title: "状态",
+            dataIndex: "enabled",
+            width: 70,
+            render: (v) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
+          },
+          {
+            title: "",
+            width: 120,
+            render: (_, r) => (
+              <Space>
+                <Button size="small" onClick={() => openForm(r)}>
+                  编辑
+                </Button>
+                <Popconfirm title="删除该工具？" onConfirm={() => remove.mutate(r.id)}>
+                  <Button size="small" danger type="text">
+                    删
+                  </Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+        footer={() => (
+          <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={() => openForm()}>
+            添加工具
+          </Button>
+        )}
+      />
+
+      <Modal
+        title={editingTool ? `编辑工具 - ${editingTool.name}` : "添加业务工具"}
+        open={creating || !!editingTool}
+        onCancel={() => {
+          setEditingTool(null);
+          setCreating(false);
+        }}
+        onOk={() => form.validateFields().then((v) => save.mutate(v))}
+        confirmLoading={save.isPending}
+        width={560}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item name="id" hidden>
+            <Input />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="name"
+                label="函数名（英文）"
+                rules={[{ required: true, pattern: /^[a-zA-Z][a-zA-Z0-9_]*$/, message: "字母开头的英文/数字/下划线" }]}
+              >
+                <Input disabled={!!editingTool} placeholder="query_order" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="type" label="类型" rules={[{ required: true }]}>
+                <Select
+                  disabled={!!editingTool}
+                  options={[
+                    { value: "http_api", label: "HTTP API（推荐）" },
+                    { value: "sql_db", label: "SQL 只读查询" },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="description" label="用途说明（给 LLM 看，写清楚何时调用、参数含义）">
+            <Input.TextArea
+              rows={2}
+              placeholder="查询订单状态。参数：order_id=订单号。用于用户询问订单进度时。"
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(a, b) => a.type !== b.type}>
+            {({ getFieldValue }) =>
+              getFieldValue("type") === "sql_db" ? (
+                <Form.Item
+                  name={["config", "dsn"]}
+                  label="数据库连接串（仅 SELECT 权限账号）"
+                  rules={[{ required: true }]}
+                >
+                  <Input placeholder="mysql+pymysql://readonly:pwd@host:3306/db" />
+                </Form.Item>
+              ) : (
+                <>
+                  <Row gutter={12}>
+                    <Col span={6}>
+                      <Form.Item name={["config", "method"]} label="方法" initialValue="GET">
+                        <Select
+                          options={["GET", "POST", "PUT", "DELETE"].map((m) => ({
+                            value: m,
+                            label: m,
+                          }))}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col span={18}>
+                      <Form.Item
+                        name={["config", "url"]}
+                        label="接口 URL（路径参数用 {order_id} 占位）"
+                        rules={[{ required: true }]}
+                      >
+                        <Input placeholder="https://api.example.com/orders/{order_id}" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item name={["config", "headers"]} label="请求头 JSON（鉴权等）">
+                    <Input.TextArea
+                      rows={2}
+                      placeholder='{"Authorization": "Bearer xxx"}'
+                    />
+                  </Form.Item>
+                </>
+              )
+            }
+          </Form.Item>
+          <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
   );
 }
 
@@ -177,7 +390,8 @@ export default function Apps() {
   });
 
   const createKey = useMutation({
-    mutationFn: () => api.post<any>(`/api/v1/apps/${keyApp!.id}/api-keys?name=console`),
+    mutationFn: (scope: string) =>
+      api.post<any>(`/api/v1/apps/${keyApp!.id}/api-keys?name=${scope === "chat" ? "widget" : "console"}&scope=${scope}`),
     onSuccess: (data) => {
       setNewKey(data.key);
       qc.invalidateQueries({ queryKey: ["apiKeys", keyApp?.id] });
@@ -295,6 +509,11 @@ export default function Apps() {
         }
       >
         <ConfigForm form={form} kbs={kbs || []} />
+        {editing && (
+          <div style={{ marginTop: 24 }}>
+            <ToolsSection appId={editing.id} />
+          </div>
+        )}
       </Drawer>
 
       <Modal
@@ -302,6 +521,7 @@ export default function Apps() {
         open={!!keyApp}
         onCancel={() => setKeyApp(null)}
         footer={null}
+        width={640}
       >
         {newKey && (
           <Typography.Paragraph copyable style={{ marginBottom: 16 }}>
@@ -318,6 +538,7 @@ export default function Apps() {
           pagination={false}
           columns={[
             { title: "名称", dataIndex: "name" },
+            { title: "权限", dataIndex: "scope", width: 90, render: (v) => (v === "chat" ? <Tag color="blue">仅对话</Tag> : <Tag>完整</Tag>) },
             { title: "创建时间", dataIndex: "created_at", render: (v) => v?.slice(0, 10) },
             {
               title: "",
@@ -338,18 +559,46 @@ export default function Apps() {
             },
           ]}
         />
-        <Button
-          block
-          type="dashed"
-          icon={<ApiOutlined />}
-          style={{ marginTop: 12 }}
-          onClick={() => createKey.mutate()}
-          loading={createKey.isPending}
-        >
-          生成新 Key
-        </Button>
-        <Typography.Paragraph type="secondary" style={{ marginTop: 12, fontSize: 12 }}>
-          使用方式：POST /api/v1/chat/stream，Header 携带 Authorization: Bearer &lt;key&gt;
+        <Space style={{ marginTop: 12, width: "100%" }}>
+          <Button
+            type="dashed"
+            icon={<ApiOutlined />}
+            onClick={() => createKey.mutate("full")}
+            loading={createKey.isPending}
+          >
+            生成完整 Key
+          </Button>
+          <Button
+            type="dashed"
+            onClick={() => createKey.mutate("chat")}
+            loading={createKey.isPending}
+          >
+            生成挂件 Key（仅对话）
+          </Button>
+        </Space>
+        {newKey && (
+          <div style={{ marginTop: 16 }}>
+            <Typography.Text strong style={{ fontSize: 12 }}>
+              网页挂件嵌入代码（把 HOST 换成你的部署地址）：
+            </Typography.Text>
+            <Typography.Paragraph
+              copyable
+              style={{
+                marginTop: 6,
+                padding: "8px 10px",
+                background: "#f6f8fa",
+                borderRadius: 6,
+                fontSize: 12,
+                fontFamily: "monospace",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {`<script src="https://HOST/widget.js" data-key="${newKey}" defer></script>`}
+            </Typography.Paragraph>
+          </div>
+        )}
+        <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
+          API 调用：POST /api/v1/chat/stream，Header 携带 Authorization: Bearer &lt;key&gt;
         </Typography.Paragraph>
       </Modal>
     </Card>

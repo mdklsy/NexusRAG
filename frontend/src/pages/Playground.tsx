@@ -28,6 +28,7 @@ interface ChatMsg {
   content: string;
   citations?: Citation[];
   meta?: string;
+  tools?: { name: string; ok: boolean }[];
 }
 
 export default function Playground() {
@@ -50,6 +51,7 @@ export default function Playground() {
     setMessages((m) => [...m, { role: "user", content: question }, { role: "assistant", content: "" }]);
     setBusy(true);
     let metaInfo = "";
+    let toolCalls: { name: string; ok: boolean }[] = [];
     try {
       await chatStream(
         {
@@ -77,6 +79,20 @@ export default function Playground() {
             });
           } else if (ev.type === "retrieval") {
             metaInfo = `命中 ${ev.chunks} 块 · 图谱事实 ${ev.graph_facts} 条`;
+          } else if (ev.type === "tool_call") {
+            toolCalls.push({ name: ev.name, ok: true });
+            setMessages((m) => {
+              const copy = [...m];
+              copy[copy.length - 1] = { ...copy[copy.length - 1], tools: [...toolCalls] };
+              return copy;
+            });
+          } else if (ev.type === "tool_result") {
+            if (toolCalls.length) toolCalls[toolCalls.length - 1].ok = ev.ok;
+            setMessages((m) => {
+              const copy = [...m];
+              copy[copy.length - 1] = { ...copy[copy.length - 1], tools: [...toolCalls] };
+              return copy;
+            });
           } else if (ev.type === "done") {
             metaInfo += ` · ${ev.latency_ms}ms`;
             setMessages((m) => {
@@ -160,6 +176,15 @@ export default function Playground() {
                 }}
               >
                 {m.content || (busy && i === messages.length - 1 ? <Spin size="small" /> : "")}
+                {m.tools && m.tools.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    {m.tools.map((t, ti) => (
+                      <Tag key={ti} color={t.ok === false ? "red" : "geekblue"} style={{ fontSize: 11 }}>
+                        ⚙ {t.name}
+                      </Tag>
+                    ))}
+                  </div>
+                )}
                 {m.citations && m.citations.length > 0 && (
                   <div style={{ marginTop: 8, borderTop: "1px dashed #ddd", paddingTop: 8 }}>
                     <Typography.Text strong style={{ fontSize: 12 }}>

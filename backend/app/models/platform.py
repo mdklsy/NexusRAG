@@ -33,4 +33,5 @@ class ApiKey(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(100), default="default")
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    scope: Mapped[str] = mapped_column(String(20), default="full")  # full | chat(挂件用)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

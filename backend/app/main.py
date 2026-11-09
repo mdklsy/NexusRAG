@@ -37,9 +37,23 @@ async def healthz():
     return {"status": "ok", "service": "nexusrag-api"}
 
 
+# 聊天挂件：app/static/widget.js，一行 <script> 嵌入即用
+_static = Path(__file__).resolve().parent / "static"
+if (_static / "widget.js").is_file():
+
+    @app.get("/widget.js", include_in_schema=False)
+    async def widget_js():
+        from fastapi.responses import FileResponse
+
+        return FileResponse(
+            _static / "widget.js",
+            media_type="application/javascript; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+
 # 生产环境：若存在前端构建产物则托管（compose 中由独立 web 容器承担，此项为兜底）
-_dist = Path(__file__).resolve().parent.parent / "static"
-if _dist.is_dir():
+if _static.is_dir():
     from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=_dist, html=True), name="static")
+    app.mount("/static", StaticFiles(directory=_static), name="static")

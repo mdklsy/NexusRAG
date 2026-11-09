@@ -53,6 +53,7 @@ async def create_app(
         system_prompt=body.system_prompt,
         llm_config=body.llm_config,
         retrieval_config=body.retrieval_config,
+        widget_config=body.widget_config,
     )
     session.add(app)
     await session.flush()
@@ -117,14 +118,17 @@ async def delete_app(
 async def create_api_key(
     app_id: uuid.UUID,
     name: str = "default",
+    scope: str = "full",  # full | chat（挂件用）
     _: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     app = await session.get(App, app_id)
     if app is None:
         raise HTTPException(404, "应用不存在")
+    if scope not in ("full", "chat"):
+        raise HTTPException(400, "scope 仅支持 full | chat")
     raw, key_hash = generate_api_key()
-    key = ApiKey(app_id=app_id, name=name, key_hash=key_hash)
+    key = ApiKey(app_id=app_id, name=name, key_hash=key_hash, scope=scope)
     session.add(key)
     await session.commit()
     await session.refresh(key)

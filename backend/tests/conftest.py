@@ -59,6 +59,10 @@ class FakeLLMClient:
             yield piece, None
         yield "", {"tokens_in": 12, "tokens_out": 8}
 
+    async def chat_with_tools(self, messages, tools, temperature=0.3, max_tokens=2048):
+        """默认不调用工具，直接作答；测试中可覆写。"""
+        return "默认回答", None, {"tokens_in": 5, "tokens_out": 3}
+
 
 @pytest_asyncio.fixture
 async def sqlite_env(tmp_path, monkeypatch):

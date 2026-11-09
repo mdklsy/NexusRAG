@@ -91,6 +91,7 @@ class AppCreate(BaseModel):
     system_prompt: str = ""
     llm_config: dict = Field(default_factory=lambda: dict(DEFAULT_LLM_CONFIG))
     retrieval_config: dict = Field(default_factory=lambda: dict(DEFAULT_RETRIEVAL_CONFIG))
+    widget_config: dict = Field(default_factory=dict)
     kb_ids: list[uuid.UUID] = []
 
 
@@ -101,6 +102,7 @@ class AppUpdate(BaseModel):
     system_prompt: str | None = None
     llm_config: dict | None = None
     retrieval_config: dict | None = None
+    widget_config: dict | None = None
     kb_ids: list[uuid.UUID] | None = None
     is_active: bool | None = None
 
@@ -113,6 +115,7 @@ class AppOut(ORMModel):
     system_prompt: str
     llm_config: dict
     retrieval_config: dict
+    widget_config: dict = {}
     is_active: bool
     created_at: datetime
 
@@ -121,11 +124,52 @@ class AppDetailOut(AppOut):
     kb_ids: list[uuid.UUID] = []
 
 
+# ---------- Tool（业务连接器） ----------
+class ToolCreate(BaseModel):
+    name: str = Field(max_length=100, pattern=r"^[a-zA-Z][a-zA-Z0-9_]*$")
+    display_name: str = ""
+    description: str = ""
+    type: str = Field(pattern=r"^(http_api|sql_db)$")
+    config: dict = Field(default_factory=dict)
+    parameters_schema: dict = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class ToolUpdate(BaseModel):
+    display_name: str | None = None
+    description: str | None = None
+    config: dict | None = None
+    parameters_schema: dict | None = None
+    enabled: bool | None = None
+
+
+class ToolOut(ORMModel):
+    id: uuid.UUID
+    app_id: uuid.UUID
+    name: str
+    display_name: str
+    description: str
+    type: str
+    config: dict
+    enabled: bool
+    created_at: datetime
+
+
+class WidgetConfigOut(BaseModel):
+    app_id: uuid.UUID
+    title: str
+    welcome: str
+    theme: str
+    bubble: str
+    app_name: str
+
+
 class ApiKeyOut(ORMModel):
     id: uuid.UUID
     app_id: uuid.UUID
     name: str
     is_active: bool
+    scope: str = "full"
     last_used_at: datetime | None
     created_at: datetime
 

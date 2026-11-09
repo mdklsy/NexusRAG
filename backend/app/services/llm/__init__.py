@@ -66,6 +66,48 @@ class LLMClient:
                     yield delta.content, None
         yield "", usage
 
+    async def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 2048,
+    ) -> tuple[str, list[dict] | None]:
+        """带 function calling 的非流式调用。
+
+        返回 (content, tool_calls, usage)；tool_calls 为 None 表示无需调用工具。
+        tool_calls 元素：{"id", "name", "arguments"(json 字符串)}。
+        """
+        kwargs: dict = {}
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        resp = await self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+        choice = resp.choices[0]
+        tool_calls = None
+        if choice.message.tool_calls:
+            tool_calls = [
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments or "{}",
+                }
+                for tc in choice.message.tool_calls
+            ]
+        usage = {}
+        if resp.usage:
+            usage = {
+                "tokens_in": resp.usage.prompt_tokens or 0,
+                "tokens_out": resp.usage.completion_tokens or 0,
+            }
+        return choice.message.content or "", tool_calls, usage
+
     async def chat_json(
         self,
         messages: list[dict],

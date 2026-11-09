@@ -84,6 +84,23 @@ curl -N http://localhost:8000/api/v1/chat/stream \
   -d '{"app_id": "xxx", "messages": [{"role": "user", "content": "你们的退款政策是什么？"}]}'
 ```
 
+### 一行代码把客服挂到任意网页
+
+应用配置里生成「挂件 Key（仅对话）」，把下面这行加到你的网站 `</body>` 前：
+
+```html
+<script src="http://your-host/widget.js" data-key="nx-挂件Key" defer></script>
+```
+
+右下角出现 💬 气泡，点击即聊——流式回答、引用溯源、工具调用状态全都有，Shadow DOM 隔离样式，不依赖任何框架。
+
+### 让助手能查你的业务系统
+
+应用「配置 → 业务工具」里添加连接器，LLM 会在需要时自动调用（function calling）：
+
+- **HTTP API**：填 Method + URL（支持 `{order_id}` 路径占位）+ 请求头，即可对接现有业务接口
+- **SQL 只读查询**：填数据库连接串（建议只读账号），内置安全校验——仅允许单条 SELECT/WITH，禁止写操作与多语句，最多返回 20 行
+
 ## 项目结构
 
 ```
@@ -98,7 +115,8 @@ curl -N http://localhost:8000/api/v1/chat/stream \
 ## 路线图
 
 - [x] 一期：核心 RAG + 轻量 KG + 控制台 + 数据看板 + 开放 API
-- [ ] 二期：网页聊天挂件 / 小程序 SDK、业务系统连接器（DB & API 工具）、混合检索(BM25)、重排模型
+- [x] 二期：网页聊天挂件（一行 script）、业务系统连接器（HTTP API + 只读 SQL + function calling）、挂件专用 Key（scope=chat）
+- [ ] 二期续：混合检索(BM25+RRF)、重排模型、小程序 SDK、Ragas 风格评测
 - [ ] 三期：可视化工作流编排、多租户与团队协作、Neo4j 图引擎、GraphRAG 深度模式
 
 ## 参与贡献

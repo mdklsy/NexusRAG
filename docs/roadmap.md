@@ -12,9 +12,10 @@
 
 ## 二期：接入生态
 
-- [ ] 网页聊天挂件（一行 script 嵌入）
+- [x] 网页聊天挂件（一行 script 嵌入，Shadow DOM 隔离，`/widget.js`）
+- [x] 业务系统连接器：HTTP API 工具 + 只读 SQL 连接器（function calling 循环）
+- [x] 挂件专用 API Key（scope=chat）与挂件外观配置（标题/欢迎语/主题色）
 - [ ] 微信小程序 SDK 与微信公众号接入
-- [ ] 业务系统连接器：数据库连接器 + REST API 工具（LLM function calling）
 - [ ] 混合检索：BM25 + 向量，RRF 融合
 - [ ] Cross-Encoder 重排模型支持
 - [ ] 意图识别可配置化（多轮澄清、转人工兜底）
