@@ -1,0 +1,113 @@
+"""应用域模型：应用、应用-知识库绑定、对话、消息、用量事件。"""
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import JSON
+
+from app.db.base import Base, TenantMixin, TimestampMixin
+from app.models.kb import JSONType
+
+DEFAULT_LLM_CONFIG = {"model": "", "temperature": 0.3, "max_tokens": 2048}
+DEFAULT_RETRIEVAL_CONFIG = {
+    "top_k": 5,
+    "score_threshold": 0.35,
+    "use_kg": True,
+    "kg_hops": 1,
+    "kg_top_entities": 3,
+    "history_window": 6,
+    "intent_route": True,
+}
+
+
+class App(TenantMixin, TimestampMixin, Base):
+    __tablename__ = "apps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    icon: Mapped[str] = mapped_column(String(10), default="🤖")
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    llm_config: Mapped[dict] = mapped_column(JSONType, default=DEFAULT_LLM_CONFIG)
+    retrieval_config: Mapped[dict] = mapped_column(
+        JSONType, default=DEFAULT_RETRIEVAL_CONFIG
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AppKnowledgeBase(Base):
+    __tablename__ = "app_knowledge_bases"
+    __table_args__ = (UniqueConstraint("app_id", "kb_id", name="uq_app_kb"),)
+
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("apps.id", ondelete="CASCADE"), primary_key=True
+    )
+    kb_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class Conversation(TimestampMixin, Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("apps.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(300), default="新对话")
+    meta: Mapped[dict] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), default=dict)
+
+
+class Message(TimestampMixin, Base):
+    __tablename__ = "messages"
+    __table_args__ = (Index("ix_messages_conversation", "conversation_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))  # user | assistant | system
+    content: Mapped[str] = mapped_column(Text)
+    citations: Mapped[list] = mapped_column(JSONType, default=list)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class UsageEvent(Base):
+    """用量事件：看板数据来源。type = chat | retrieval。"""
+
+    __tablename__ = "usage_events"
+    __table_args__ = (Index("ix_usage_events_app_created", "app_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    app_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("apps.id", ondelete="CASCADE"))
+    type: Mapped[str] = mapped_column(String(20))
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    hit: Mapped[bool | None] = mapped_column(Boolean)  # 检索是否命中（chat 也记录）
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
