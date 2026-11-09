@@ -150,3 +150,25 @@ class ChunkEntity(Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
     )
+
+
+class ChunkToken(Base):
+    """BM25 倒排索引：token → chunk。
+
+    摄取时按 chunk 分词去重写入（每词一行）；
+    检索时按 token 拉候选并在应用层计算 BM25（PG/SQLite 双方言通吃）。
+    """
+
+    __tablename__ = "chunk_tokens"
+    __table_args__ = (
+        UniqueConstraint("chunk_id", "token", name="uq_chunk_tokens"),
+        Index("ix_chunk_tokens_token", "token"),
+    )
+
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chunks.id", ondelete="CASCADE"), primary_key=True
+    )
+    token: Mapped[str] = mapped_column(String(120), primary_key=True)
+    kb_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )

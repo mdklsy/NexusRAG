@@ -15,9 +15,10 @@
 - [x] 网页聊天挂件（一行 script 嵌入，Shadow DOM 隔离，`/widget.js`）
 - [x] 业务系统连接器：HTTP API 工具 + 只读 SQL 连接器（function calling 循环）
 - [x] 挂件专用 API Key（scope=chat）与挂件外观配置（标题/欢迎语/主题色）
-- [ ] 微信小程序 SDK 与微信公众号接入
-- [ ] 混合检索：BM25 + 向量，RRF 融合
-- [ ] Cross-Encoder 重排模型支持
+- [x] 微信小程序 SDK（`miniprogram/`，chunked SSE + 低版本降级，5 用例测试）
+- [x] 混合检索：jieba 分词 + chunk_tokens 倒排 + BM25 + 向量 RRF 融合
+- [x] 重排：LLM 重排（零依赖）+ Cross-Encoder（可选依赖 `[rerank]`）
+- [ ] 微信公众号接入
 - [ ] 意图识别可配置化（多轮澄清、转人工兜底）
 - [ ] 问答评测（ Ragas 风格：忠实度 / 相关性 / 命中率）
 

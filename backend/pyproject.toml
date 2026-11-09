@@ -24,6 +24,7 @@ dependencies = [
     "selectolax>=0.3.21",
     "bcrypt>=4.1",
     "PyJWT>=2.8",
+    "jieba>=0.42",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,9 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "aiosqlite>=0.20",
+]
+rerank = [
+    "sentence-transformers>=2.7",
 ]
 
 [build-system]

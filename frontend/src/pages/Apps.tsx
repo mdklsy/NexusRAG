@@ -46,7 +46,7 @@ function ConfigForm({
   kbs: { id: string; name: string }[];
 }) {
   return (
-    <Form form={form} layout="vertical" initialValues={{ icon: "🤖", temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, model: "" }}>
+    <Form form={form} layout="vertical" initialValues={{ icon: "🤖", temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
       <Row gutter={12}>
         <Col span={2}>
           <Form.Item name="icon" label="图标">
@@ -125,6 +125,29 @@ function ConfigForm({
               <InputNumber min={1} max={10} size="small" />
             </Form.Item>
             <Typography.Text type="secondary">（图谱增强：实体链接 → 子图召回 → 事实注入）</Typography.Text>
+          </Space>
+        </Col>
+        <Col span={24}>
+          <Space size={16}>
+            <Form.Item name={["retrieval_config", "use_bm25"]} label="BM25 混合检索" valuePropName="checked" noStyle>
+              <Switch size="small" />
+            </Form.Item>
+            <Form.Item
+              name={["retrieval_config", "rerank"]}
+              label="重排"
+              noStyle
+            >
+              <Select
+                size="small"
+                style={{ width: 150 }}
+                options={[
+                  { value: "none", label: "不重排" },
+                  { value: "llm", label: "LLM 重排" },
+                  { value: "cross_encoder", label: "Cross-Encoder（需装依赖）" },
+                ]}
+              />
+            </Form.Item>
+            <Typography.Text type="secondary">（向量+BM25 RRF 融合；重排对候选二次精排）</Typography.Text>
           </Space>
         </Col>
       </Row>

@@ -30,6 +30,8 @@ DEFAULT_RETRIEVAL_CONFIG = {
     "kg_top_entities": 3,
     "history_window": 6,
     "intent_route": True,
+    "use_bm25": True,   # 混合检索：向量 + BM25，RRF 融合
+    "rerank": "none",   # none | llm | cross_encoder
 }
 DEFAULT_WIDGET_CONFIG = {"title": "", "welcome": "", "theme": "#1677ff", "bubble": "💬"}
 DEFAULT_TOOL_CONFIG = {"timeout": 15}

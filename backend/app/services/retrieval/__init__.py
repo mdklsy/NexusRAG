@@ -1,7 +1,7 @@
-"""检索融合层：向量召回 + KG 子图增强，统一产出上下文与引用。"""
+"""检索融合层：向量召回 + BM25 混合 + KG 子图增强，统一产出上下文与引用。"""
 
+import logging
 import uuid
-from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,63 +10,20 @@ from app.models.app import AppKnowledgeBase
 from app.models.kb import Chunk, Document, KnowledgeBase
 from app.services.ingestion.vectorstore import get_vector_store
 from app.services.kg.extractor import link_query_entities
-from app.services.kg.graph_store import GraphEntity, SubGraph, get_graph_store
-from app.services.llm import get_embedding_client
+from app.services.kg.graph_store import get_graph_store
+from app.services.llm import get_embedding_client, get_llm_client
+from app.services.retrieval.hybrid import bm25_search, rrf_fuse
+from app.services.retrieval.models import RetrievalResult, RetrievedChunk
+from app.services.retrieval.rerank import rerank_chunks
 
+logger = logging.getLogger(__name__)
 
-@dataclass
-class RetrievedChunk:
-    chunk_id: uuid.UUID
-    document_id: uuid.UUID
-    document_name: str
-    content: str
-    score: float
-    seq: int = 0
-    heading: str = ""
-
-
-@dataclass
-class RetrievalResult:
-    chunks: list[RetrievedChunk] = field(default_factory=list)
-    graph_entities: list[GraphEntity] = field(default_factory=list)
-    graph_facts: list[str] = field(default_factory=list)
-    subgraph: SubGraph | None = None
-
-    @property
-    def hit(self) -> bool:
-        return bool(self.chunks)
-
-    def build_context(self, max_chunks: int = 8, max_chars: int = 6000) -> tuple[str, list[dict]]:
-        """构建 LLM 上下文块 + 引用列表。返回 (context_text, citations)。"""
-        parts: list[str] = []
-        citations: list[dict] = []
-        used = 0
-        for i, c in enumerate(self.chunks[:max_chunks], start=1):
-            body = c.content[:1200]
-            if used + len(body) > max_chars:
-                break
-            used += len(body)
-            head = f"[{i}] ({c.document_name}"
-            if c.heading:
-                head += f" · {c.heading}"
-            head += ")"
-            parts.append(f"{head}\n{body}")
-            citations.append(
-                {
-                    "index": i,
-                    "chunk_id": str(c.chunk_id),
-                    "document_id": str(c.document_id),
-                    "document_name": c.document_name,
-                    "heading": c.heading,
-                    "score": round(c.score, 4),
-                    "snippet": c.content[:200],
-                }
-            )
-        context = "\n\n".join(parts)
-        if self.graph_facts:
-            facts = "\n".join(f"- {f}" for f in self.graph_facts)
-            context += f"\n\n【知识图谱事实】\n{facts}"
-        return context, citations
+__all__ = [
+    "RetrievedChunk",
+    "RetrievalResult",
+    "get_app_knowledge_bases",
+    "retrieve",
+]
 
 
 async def get_app_knowledge_bases(session: AsyncSession, app_id: uuid.UUID) -> list[KnowledgeBase]:
@@ -90,43 +47,64 @@ async def retrieve(
     query: str,
     config: dict | None = None,
 ) -> RetrievalResult:
-    """向量检索 + 可选 KG 子图增强。"""
+    """混合检索（向量 + BM25 RRF 融合）→ 重排 → KG 子图增强。"""
     config = config or {}
     top_k = int(config.get("top_k", 5))
     threshold = float(config.get("score_threshold", 0.35))
     use_kg = bool(config.get("use_kg", True))
     hops = int(config.get("kg_hops", 1))
     top_entities = int(config.get("kg_top_entities", 3))
+    use_bm25 = bool(config.get("use_bm25", True))
+    rerank_mode = str(config.get("rerank", "none") or "none")
 
     result = RetrievalResult()
     if not kbs:
         return result
 
-    # ---------- 向量召回 ----------
+    # ---------- 召回：向量 + BM25 → RRF 融合 ----------
     embedder = get_embedding_client()
     qvec = (await embedder.embed([query]))[0]
     store = get_vector_store()
 
-    hit_ids: list[tuple[uuid.UUID, float]] = []
+    vector_ranks: list[uuid.UUID] = []
+    score_map: dict[uuid.UUID, float] = {}
     for kb in kbs:
         hits = await store.search(kb.id, qvec, top_k=top_k, score_threshold=threshold)
-        hit_ids.extend((h.chunk_id, h.score) for h in hits)
+        for h in hits:
+            vector_ranks.append(h.chunk_id)
+            score_map[h.chunk_id] = h.score
 
-    if hit_ids:
-        hit_ids.sort(key=lambda x: -x[1])
-        hit_ids = hit_ids[: top_k * 2]
+    bm25_ranks: list[uuid.UUID] = []
+    if use_bm25:
+        try:
+            bm25_hits = await bm25_search(session, [kb.id for kb in kbs], query)
+            bm25_ranks = [h.chunk_id for h in bm25_hits]
+        except Exception as e:  # noqa: BLE001 BM25 失败不影响向量主链路
+            logger.warning("bm25 search failed: %s", e)
+
+    if vector_ranks and bm25_ranks:
+        fused = rrf_fuse([vector_ranks, bm25_ranks])[: top_k * 3]
+    elif bm25_ranks:
+        fused = bm25_ranks[: top_k * 3]
+    else:
+        fused = vector_ranks[: top_k * 3]
+
+    if fused:
         rows = (
             (
                 await session.execute(
                     select(Chunk, Document.name)
                     .join(Document, Chunk.document_id == Document.id)
-                    .where(Chunk.id.in_([h[0] for h in hit_ids]))
+                    .where(Chunk.id.in_(fused))
                 )
             )
             .all()
         )
-        score_map = {cid: score for cid, score in hit_ids}
-        for chunk, doc_name in rows:
+        row_map = {chunk.id: (chunk, doc_name) for chunk, doc_name in rows}
+        for cid in fused:
+            if cid not in row_map:
+                continue
+            chunk, doc_name = row_map[cid]
             result.chunks.append(
                 RetrievedChunk(
                     chunk_id=chunk.id,
@@ -138,7 +116,12 @@ async def retrieve(
                     heading=chunk.meta.get("heading", ""),
                 )
             )
-        result.chunks.sort(key=lambda c: -c.score)
+
+        # ---------- 重排 ----------
+        if rerank_mode != "none" and len(result.chunks) > 1:
+            llm = get_llm_client()
+            result.chunks = await rerank_chunks(llm, rerank_mode, query, result.chunks)
+        result.chunks = result.chunks[:top_k]
 
     # ---------- KG 增强 ----------
     if use_kg:

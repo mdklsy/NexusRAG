@@ -10,9 +10,10 @@ from sqlalchemy import delete, func, select, update
 
 from app.core.config import get_settings
 from app.db.session import session_scope
-from app.models.kb import Chunk, Document, KnowledgeBase, Relation
+from app.models.kb import Chunk, ChunkToken, Document, KnowledgeBase, Relation
 from app.services.ingestion.chunkers import chunk_text, estimate_tokens
 from app.services.ingestion.parsers import ParseError, fetch_url, parse_bytes
+from app.services.ingestion.tokenizer import tokenize
 from app.services.ingestion.vectorstore import get_vector_store
 from app.services.kg.extractor import extract_triples
 from app.services.kg.graph_store import get_graph_store
@@ -97,6 +98,11 @@ async def ingest_document(document_id: uuid.UUID) -> None:
                             meta=r.meta,
                         )
                     )
+                    # BM25 倒排（去重 token 每词一行）
+                    for token in set(tokenize(r.content)):
+                        session.add(
+                            ChunkToken(chunk_id=cid, token=token, kb_id=kb.id)
+                        )
                 await session.commit()
             await store.upsert(kb.id, chunk_ids, vectors, payloads)
             saved_chunks.extend(batch)  # 仅计数用

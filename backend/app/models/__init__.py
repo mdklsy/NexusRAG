@@ -11,6 +11,7 @@ from app.models.app import (
 from app.models.kb import (
     Chunk,
     ChunkEntity,
+    ChunkToken,
     Document,
     Entity,
     KnowledgeBase,
@@ -30,6 +31,7 @@ __all__ = [
     "KnowledgeBase",
     "Document",
     "Chunk",
+    "ChunkToken",
     "Entity",
     "Relation",
     "ChunkEntity",
