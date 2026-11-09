@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_role
+from app.core.crypto import mask_secret
 from app.core.security import generate_api_key
 from app.db.session import get_session
 from app.models.app import App, AppKnowledgeBase
@@ -35,15 +36,49 @@ async def _set_kb_bindings(session: AsyncSession, app_id: uuid.UUID, kb_ids: lis
 async def list_apps(
     _: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ):
-    return (
+    apps = (
         (await session.execute(select(App).order_by(App.created_at.desc()))).scalars().all()
     )
+    out = []
+    for a in apps:
+        data = AppOut.model_validate(a).model_dump()
+        data["llm_config"] = _sanitize_llm_config(a.llm_config)
+        out.append(AppOut.model_validate(data))
+    return out
+
+
+def _prepare_llm_config(cfg: dict | None) -> dict:
+    """入库前处理 llm_config：明文 api_key → AES 密文 api_key_enc。"""
+    cfg = dict(cfg or {})
+    plain = cfg.pop("api_key", "")
+    if plain:  # 空值表示"不变更"
+        from app.core.crypto import encrypt_secret
+
+        cfg["api_key_enc"] = encrypt_secret(plain)
+        cfg["api_key_set"] = True
+    cfg.pop("api_key_masked", None)
+    return cfg
+
+
+def _sanitize_llm_config(cfg: dict | None) -> dict:
+    """出库时：密文 → 打码，避免泄漏。"""
+    cfg = dict(cfg or {})
+    enc = cfg.pop("api_key_enc", "")
+    cfg["api_key_masked"] = mask_secret(enc, encrypted=True) if enc else ""
+    cfg["api_key_set"] = bool(enc)
+    return cfg
+
+
+def _app_detail(app: App, kb_ids: list) -> AppDetailOut:
+    out = AppOut.model_validate(app).model_dump()
+    out["llm_config"] = _sanitize_llm_config(app.llm_config)
+    return AppDetailOut(**out, kb_ids=kb_ids)
 
 
 @router.post("", response_model=AppDetailOut, status_code=201)
 async def create_app(
     body: AppCreate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     app = App(
@@ -51,7 +86,7 @@ async def create_app(
         description=body.description,
         icon=body.icon,
         system_prompt=body.system_prompt,
-        llm_config=body.llm_config,
+        llm_config=_prepare_llm_config(body.llm_config),
         retrieval_config=body.retrieval_config,
         widget_config=body.widget_config,
     )
@@ -60,7 +95,7 @@ async def create_app(
     await _set_kb_bindings(session, app.id, body.kb_ids)
     await session.commit()
     await session.refresh(app)
-    return AppDetailOut(**AppOut.model_validate(app).model_dump(), kb_ids=body.kb_ids)
+    return _app_detail(app, body.kb_ids)
 
 
 @router.get("/{app_id}", response_model=AppDetailOut)
@@ -73,14 +108,14 @@ async def get_app(
     if app is None:
         raise HTTPException(404, "应用不存在")
     kb_ids = await _load_kb_ids(session, app_id)
-    return AppDetailOut(**AppOut.model_validate(app).model_dump(), kb_ids=kb_ids)
+    return _app_detail(app, kb_ids)
 
 
 @router.put("/{app_id}", response_model=AppDetailOut)
 async def update_app(
     app_id: uuid.UUID,
     body: AppUpdate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     app = await session.get(App, app_id)
@@ -88,6 +123,21 @@ async def update_app(
         raise HTTPException(404, "应用不存在")
     data = body.model_dump(exclude_unset=True)
     kb_ids = data.pop("kb_ids", None)
+    if "llm_config" in data:
+        # 合并式更新：保留旧密文，除非显式给了新 api_key
+        merged = dict(app.llm_config or {})
+        incoming = dict(data["llm_config"] or {})
+        for k in ("model", "temperature", "max_tokens", "api_base"):
+            if k in incoming:
+                merged[k] = incoming[k]
+        if "clear_api_key" in incoming and incoming["clear_api_key"]:
+            merged.pop("api_key_enc", None)
+        if incoming.get("api_key"):
+            from app.core.crypto import encrypt_secret
+
+            merged["api_key_enc"] = encrypt_secret(incoming["api_key"])
+            merged["api_key_set"] = True
+        data["llm_config"] = merged
     for field, value in data.items():
         setattr(app, field, value)
     if kb_ids is not None:
@@ -95,13 +145,13 @@ async def update_app(
     await session.commit()
     await session.refresh(app)
     final_kb_ids = await _load_kb_ids(session, app_id)
-    return AppDetailOut(**AppOut.model_validate(app).model_dump(), kb_ids=final_kb_ids)
+    return _app_detail(app, final_kb_ids)
 
 
 @router.delete("/{app_id}", status_code=204)
 async def delete_app(
     app_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     app = await session.get(App, app_id)
@@ -119,7 +169,7 @@ async def create_api_key(
     app_id: uuid.UUID,
     name: str = "default",
     scope: str = "full",  # full | chat（挂件用）
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     app = await session.get(App, app_id)
@@ -156,7 +206,7 @@ async def list_api_keys(
 async def delete_api_key(
     app_id: uuid.UUID,
     key_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     await session.execute(

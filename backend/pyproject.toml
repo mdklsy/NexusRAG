@@ -25,6 +25,7 @@ dependencies = [
     "bcrypt>=4.1",
     "PyJWT>=2.8",
     "jieba>=0.42",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

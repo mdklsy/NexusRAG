@@ -23,7 +23,20 @@ class UserOut(ORMModel):
     id: uuid.UUID
     email: str
     name: str
-    is_admin: bool
+    role: str = "editor"
+
+
+class UserCreate(BaseModel):
+    email: str
+    name: str = ""
+    password: str = Field(min_length=6)
+    role: str = "editor"
+
+
+class UserUpdate(BaseModel):
+    name: str | None = None
+    password: str | None = Field(default=None, min_length=6)
+    role: str | None = None
 
 
 class TokenOut(BaseModel):
@@ -162,6 +175,77 @@ class WidgetConfigOut(BaseModel):
     theme: str
     bubble: str
     app_name: str
+
+
+# ---------- Eval（评测） ----------
+class EvalCaseIn(BaseModel):
+    question: str = Field(min_length=1)
+    expected_points: str = ""
+    expected_doc_name: str = ""
+
+
+class EvalCaseOut(ORMModel):
+    id: uuid.UUID
+    question: str
+    expected_points: str
+    expected_doc_name: str
+
+
+class EvalSetCreate(BaseModel):
+    name: str = Field(max_length=200)
+    description: str = ""
+    cases: list[EvalCaseIn]
+
+
+class EvalSetOut(ORMModel):
+    id: uuid.UUID
+    app_id: uuid.UUID
+    name: str
+    description: str
+    created_at: datetime
+
+
+class EvalSetDetailOut(EvalSetOut):
+    cases: list[EvalCaseOut] = []
+
+
+class EvalRunOut(ORMModel):
+    id: uuid.UUID
+    eval_set_id: uuid.UUID
+    status: str
+    total: int
+    done: int
+    avg_faithfulness: float | None
+    avg_relevance: float | None
+    hit_rate: float | None
+    error: str | None
+    created_at: datetime
+
+
+# ---------- WeChat（公众号） ----------
+class WechatConfigCreate(BaseModel):
+    name: str = ""
+    wx_app_id: str = ""
+    verify_token: str = Field(min_length=3)
+    welcome_reply: str = ""
+
+
+class WechatConfigUpdate(BaseModel):
+    name: str | None = None
+    wx_app_id: str | None = None
+    verify_token: str | None = None
+    welcome_reply: str | None = None
+    enabled: bool | None = None
+
+
+class WechatConfigOut(ORMModel):
+    id: uuid.UUID
+    app_id: uuid.UUID
+    name: str
+    wx_app_id: str
+    verify_token: str
+    welcome_reply: str
+    enabled: bool
 
 
 class ApiKeyOut(ORMModel):

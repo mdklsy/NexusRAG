@@ -18,8 +18,16 @@ async def task_ingest_document(ctx, document_id: str) -> None:
     logger.info("ingest done: %s", document_id)
 
 
+async def task_run_eval(ctx, run_id: str) -> None:
+    from app.services.evaluator import run_eval
+
+    logger.info("eval run start: %s", run_id)
+    await run_eval(uuid.UUID(run_id))
+    logger.info("eval run done: %s", run_id)
+
+
 class WorkerSettings:
-    functions = [task_ingest_document]
+    functions = [task_ingest_document, task_run_eval]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 4
     job_timeout = 1800  # 大文档 KG 抽取可能较慢

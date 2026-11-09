@@ -22,7 +22,7 @@ async def bootstrap() -> None:
                     email=s.admin_email,
                     name="Admin",
                     hashed_password=hash_password(s.admin_password),
-                    is_admin=True,
+                    role="admin",
                 )
             )
             await session.commit()

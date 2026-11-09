@@ -28,6 +28,20 @@ async def get_current_user(
     return user
 
 
+ROLE_LEVELS = {"viewer": 0, "editor": 1, "admin": 2}
+
+
+def require_role(min_role: str):
+    """角色门槛依赖：require_role("editor") 允许 editor 及更高（admin）。"""
+
+    async def checker(user: User = Depends(get_current_user)) -> User:
+        if ROLE_LEVELS.get(user.role, -1) < ROLE_LEVELS.get(min_role, 99):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"需要 {min_role} 及以上权限")
+        return user
+
+    return checker
+
+
 async def get_app_by_api_key(
     authorization: str = Header(default=""),
     session: AsyncSession = Depends(get_session),

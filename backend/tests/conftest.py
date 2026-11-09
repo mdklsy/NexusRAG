@@ -37,12 +37,19 @@ class FakeLLMClient:
         self.stream_answer = "根据资料，NexusRAG 支持知识图谱增强检索。[1]"
 
     async def chat(self, messages, temperature=0.3, max_tokens=2048):
+        last = messages[-1]["content"] if messages else ""
+        if "【参考资料】" in last:
+            return "未拆封商品支持七天无理由退款，运费自理。", {
+                "tokens_in": 10, "tokens_out": 5,
+            }
         return "ok", {"tokens_in": 10, "tokens_out": 5}
 
     async def chat_json(self, messages, temperature=0.0, max_tokens=4096):
         last = messages[-1]["content"]
         if "意图" in last:
             return '{"intent": "qa"}'
+        if "质量评审员" in last:
+            return '{"faithfulness": 5, "relevance": 4}'
         if "知识图谱信息抽取" in last:
             return (
                 '{"triples": ['
@@ -95,6 +102,9 @@ async def sqlite_env(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.chat.orchestrator.get_llm_client", lambda *_: fake_llm)
     monkeypatch.setattr(
         "app.services.kg.extractor.get_llm_client", lambda *_: fake_llm
+    )
+    monkeypatch.setattr(
+        "app.services.evaluator.get_llm_client", lambda *_: fake_llm
     )
 
     yield engine

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_role
 from app.core.config import get_settings
 from app.db.session import get_session
 from app.models.kb import KnowledgeBase
@@ -29,7 +29,7 @@ async def list_kbs(
 @router.post("", response_model=KBOut, status_code=201)
 async def create_kb(
     body: KBCreate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     s = get_settings()
@@ -62,7 +62,7 @@ async def get_kb(
 async def update_kb(
     kb_id: uuid.UUID,
     body: KBUpdate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     kb = await session.get(KnowledgeBase, kb_id)
@@ -78,7 +78,7 @@ async def update_kb(
 @router.delete("/{kb_id}", status_code=204)
 async def delete_kb(
     kb_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     kb = await session.get(KnowledgeBase, kb_id)

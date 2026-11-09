@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_role
 from app.db.session import get_session
 from app.models.app import Tool
 from app.models.platform import User
@@ -36,7 +36,7 @@ async def list_tools(
 async def create_tool(
     app_id: uuid.UUID,
     body: ToolCreate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     # config 基本校验
@@ -60,7 +60,7 @@ async def update_tool(
     app_id: uuid.UUID,
     tool_id: uuid.UUID,
     body: ToolUpdate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     tool = await session.get(Tool, tool_id)
@@ -77,7 +77,7 @@ async def update_tool(
 async def delete_tool(
     app_id: uuid.UUID,
     tool_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     await session.execute(

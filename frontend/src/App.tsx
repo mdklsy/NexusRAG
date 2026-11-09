@@ -6,6 +6,8 @@ import Apps from "./pages/Apps";
 import KnowledgeBases from "./pages/KnowledgeBases";
 import KBDetail from "./pages/KBDetail";
 import Playground from "./pages/Playground";
+import Evals from "./pages/Evals";
+import Users from "./pages/Users";
 
 export default function App() {
   return (
@@ -17,7 +19,9 @@ export default function App() {
         <Route path="kbs" element={<KnowledgeBases />} />
         <Route path="kbs/:kbId" element={<KBDetail />} />
         <Route path="playground" element={<Playground />} />
+        <Route path="evals" element={<Evals />} />
         <Route path="dashboard" element={<Dashboard />} />
+        <Route path="users" element={<Users />} />
       </Route>
       <Route path="*" element={<Navigate to="/apps" replace />} />
     </Routes>

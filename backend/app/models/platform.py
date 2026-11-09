@@ -18,7 +18,8 @@ class User(TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(100), default="")
     hashed_password: Mapped[str] = mapped_column(String(255))
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 简单角色：admin（含用户管理）| editor（应用/知识库读写）| viewer（只读+对话）
+    role: Mapped[str] = mapped_column(String(20), default="editor", server_default="editor")
 
 
 class ApiKey(TimestampMixin, Base):

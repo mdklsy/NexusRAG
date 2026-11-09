@@ -9,11 +9,11 @@ export default function Login() {
 
   const onFinish = async (values: { email: string; password: string }) => {
     try {
-      const data = await api.post<{ token: string; user: { email: string } }>(
-        "/api/v1/auth/login",
-        values
-      );
-      login(data.token, data.user.email);
+      const data = await api.post<{
+        token: string;
+        user: { email: string; role: string };
+      }>("/api/v1/auth/login", values);
+      login(data.token, data.user.email, data.user.role);
       nav("/");
     } catch (e: any) {
       message.error(e.message || "登录失败");

@@ -73,10 +73,10 @@ function ConfigForm({
           placeholder="你是 XX 公司的智能客服，语气专业友好…"
         />
       </Form.Item>
-      <Typography.Title level={5}>模型</Typography.Title>
+      <Typography.Title level={5}>模型（留空 = 使用全局配置）</Typography.Title>
       <Row gutter={12}>
         <Col span={8}>
-          <Form.Item name={["llm_config", "model"]} label="模型（留空用全局默认）">
+          <Form.Item name={["llm_config", "model"]} label="模型名">
             <Input placeholder="deepseek-chat" />
           </Form.Item>
         </Col>
@@ -88,6 +88,24 @@ function ConfigForm({
         <Col span={8}>
           <Form.Item name={["llm_config", "max_tokens"]} label="Max Tokens">
             <InputNumber min={128} max={16384} style={{ width: "100%" }} />
+          </Form.Item>
+        </Col>
+        <Col span={12}>
+          <Form.Item
+            name={["llm_config", "api_base"]}
+            label="API Base（应用专属厂商）"
+            extra="例：https://api.deepseek.com/v1、智谱、通义、Ollama…"
+          >
+            <Input placeholder="留空用全局 LLM_API_BASE" />
+          </Form.Item>
+        </Col>
+        <Col span={12}>
+          <Form.Item
+            name={["llm_config", "api_key"]}
+            label="API Key"
+            extra="应用专属密钥，AES 加密存储；留空 = 沿用已保存/全局配置"
+          >
+            <Input.Password placeholder="留空 = 沿用已保存 / 全局 Key" />
           </Form.Item>
         </Col>
       </Row>

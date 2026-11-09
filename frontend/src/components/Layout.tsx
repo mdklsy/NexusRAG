@@ -5,24 +5,29 @@ import {
   ExperimentOutlined,
   LogoutOutlined,
   DashboardOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../stores/auth";
 
-const ITEMS = [
-  { key: "/apps", icon: <AppstoreOutlined />, label: "应用" },
-  { key: "/kbs", icon: <DatabaseOutlined />, label: "知识库" },
-  { key: "/playground", icon: <ExperimentOutlined />, label: "调试" },
-  { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
-];
-
 export default function Layout() {
   const nav = useNavigate();
   const loc = useLocation();
-  const { email, logout } = useAuth();
+  const { email, role, logout } = useAuth();
   if (!useAuth.getState().token) {
     nav("/login");
   }
+
+  const items = [
+    { key: "/apps", icon: <AppstoreOutlined />, label: "应用" },
+    { key: "/kbs", icon: <DatabaseOutlined />, label: "知识库" },
+    { key: "/playground", icon: <ExperimentOutlined />, label: "调试" },
+    { key: "/evals", icon: <ExperimentOutlined />, label: "评测" },
+    { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
+    ...(role === "admin"
+      ? [{ key: "/users", icon: <TeamOutlined />, label: "用户" }]
+      : []),
+  ];
 
   return (
     <AntLayout style={{ minHeight: "100vh" }}>
@@ -42,7 +47,7 @@ export default function Layout() {
           theme="dark"
           mode="inline"
           selectedKeys={[loc.pathname.startsWith("/kbs") ? "/kbs" : loc.pathname]}
-          items={ITEMS}
+          items={items}
           onClick={({ key }) => nav(key)}
         />
         <div style={{ position: "absolute", bottom: 16, left: 0, right: 0, padding: "0 12px" }}>

@@ -119,7 +119,8 @@ curl -N http://localhost:8000/api/v1/chat/stream \
 - [x] 一期：核心 RAG + 轻量 KG + 控制台 + 数据看板 + 开放 API
 - [x] 二期：网页聊天挂件（一行 script）、业务系统连接器（HTTP API + 只读 SQL + function calling）、挂件专用 Key（scope=chat）
 - [x] 二期续：混合检索（BM25 倒排 + 向量 RRF 融合，jieba 分词）、重排（LLM 零依赖 / Cross-Encoder 可选依赖）、微信小程序 SDK
-- [ ] 三期：Ragas 风格评测、可视化工作流编排、多租户与团队协作、Neo4j 图引擎、GraphRAG 深度模式
+- [x] 三期已落地：应用级 LLM 凭证（AES 加密，每应用可独立厂商/账号）、用户角色权限（admin/editor/viewer）、Ragas 风格评测（忠实度/相关性/命中率）、微信公众号接入
+- [ ] 后续：公众号安全模式加密、可视化工作流编排、Neo4j 图引擎、GraphRAG 深度模式（明确不做多租户）
 
 ## 参与贡献
 

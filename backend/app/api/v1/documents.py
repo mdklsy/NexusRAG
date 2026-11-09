@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_role
 from app.core.config import get_settings
 from app.core.tasks import dispatch_ingest
 from app.db.session import get_session
@@ -25,7 +25,7 @@ ALLOWED_EXTS = {".pdf", ".docx", ".xlsx", ".md", ".txt", ".csv", ".html", ".htm"
 async def upload_document(
     kb_id: uuid.UUID,
     file: UploadFile,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     kb = await session.get(KnowledgeBase, kb_id)
@@ -66,7 +66,7 @@ async def upload_document(
 async def add_url_document(
     kb_id: uuid.UUID,
     body: DocumentUrlIn,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
     session: AsyncSession = Depends(get_session),
 ):
     kb = await session.get(KnowledgeBase, kb_id)
@@ -118,7 +118,7 @@ async def get_document(
 @router.delete("/documents/{document_id}", status_code=204)
 async def delete_document(
     document_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_role("editor")),
 ):
     await purge_document(document_id)
 

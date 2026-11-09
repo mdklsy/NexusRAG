@@ -8,6 +8,7 @@ from app.models.app import (
     Tool,
     UsageEvent,
 )
+from app.models.eval import EvalCase, EvalResult, EvalRun, EvalSet
 from app.models.kb import (
     Chunk,
     ChunkEntity,
@@ -18,9 +19,11 @@ from app.models.kb import (
     Relation,
 )
 from app.models.platform import ApiKey, User
+from app.models.wechat import WechatConfig
 
 __all__ = [
     "User",
+    "WechatConfig",
     "ApiKey",
     "App",
     "AppKnowledgeBase",
@@ -28,6 +31,10 @@ __all__ = [
     "Conversation",
     "Message",
     "UsageEvent",
+    "EvalSet",
+    "EvalCase",
+    "EvalRun",
+    "EvalResult",
     "KnowledgeBase",
     "Document",
     "Chunk",
