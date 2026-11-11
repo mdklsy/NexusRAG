@@ -137,3 +137,88 @@ async def test_llm_rerank_reorders(sqlite_env):
 
     out2 = await llm_rerank(BadLLM(), "问题", chunks)
     assert out2 is chunks  # 失败原样返回
+
+
+async def test_api_rerank_reorders(sqlite_env, monkeypatch):
+    """托管 Rerank API：按 relevance_score 降序映射回候选。"""
+    import httpx
+
+    from app.core.config import get_settings
+    from app.services.retrieval import RetrievedChunk
+    from app.services.retrieval.rerank import api_rerank
+
+    cfg = get_settings()
+    monkeypatch.setattr(cfg, "rerank_api_base", "https://api.siliconflow.cn/v1")
+    monkeypatch.setattr(cfg, "rerank_api_key", "sk-test")
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            # 故意乱序返回，验证按分数降序重排
+            return {"results": [
+                {"index": 2, "relevance_score": 0.5},
+                {"index": 0, "relevance_score": 0.1},
+                {"index": 1, "relevance_score": 0.9},
+            ]}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return FakeResp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    chunks = [
+        RetrievedChunk(uuid.uuid4(), uuid.uuid4(), "a.md", "内容甲", 0.9),
+        RetrievedChunk(uuid.uuid4(), uuid.uuid4(), "b.md", "内容乙", 0.5),
+        RetrievedChunk(uuid.uuid4(), uuid.uuid4(), "c.md", "内容丙", 0.7),
+    ]
+    out = await api_rerank("问题", chunks)
+    assert [c.document_name for c in out] == ["b.md", "c.md", "a.md"]
+
+
+async def test_api_rerank_not_configured_and_failure(sqlite_env, monkeypatch):
+    """未配置 / 请求失败时原样返回（不阻塞检索主链路）。"""
+    import httpx
+
+    from app.core.config import get_settings
+    from app.services.retrieval import RetrievedChunk
+    from app.services.retrieval.rerank import api_rerank
+
+    cfg = get_settings()
+    chunks = [
+        RetrievedChunk(uuid.uuid4(), uuid.uuid4(), "a.md", "内容甲", 0.9),
+        RetrievedChunk(uuid.uuid4(), uuid.uuid4(), "b.md", "内容乙", 0.5),
+    ]
+
+    monkeypatch.setattr(cfg, "rerank_api_base", "")
+    assert await api_rerank("问题", chunks) is chunks
+
+    monkeypatch.setattr(cfg, "rerank_api_base", "https://api.siliconflow.cn/v1")
+    monkeypatch.setattr(cfg, "rerank_api_key", "sk-test")
+
+    class BoomClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(httpx, "AsyncClient", BoomClient)
+    assert await api_rerank("问题", chunks) is chunks

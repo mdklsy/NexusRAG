@@ -243,10 +243,11 @@ def section_A(admin_token: str):
 # ==================================================================== B
 def section_B(admin_token: str, kb_id: str):
     print("\n== B. 应用与凭据 ==")
+    # 主应用不带应用级凭据（回退全局 LLM 配置，mock/真实栈通用）
     body = {
         "name": TAG + "app", "description": "E2E 应用", "icon": "🧪",
         "system_prompt": "你是测试助手。",
-        "llm_config": {"model": "mock", "max_tokens": 2048, "temperature": 0.3, "api_key": "sk-plain-1234567890abcdef"},
+        "llm_config": {"model": "", "max_tokens": 2048, "temperature": 0.3},
         "retrieval_config": {"top_k": 3, "use_kg": True, "use_bm25": True, "intent_route": True},
         "kb_ids": [kb_id],
     }
@@ -262,12 +263,25 @@ def section_B(admin_token: str, kb_id: str):
     det = api("GET", f"/api/v1/apps/{app_id}", admin_token).json()
     check("B", "B03", "详情 kb_ids 一致", det.get("kb_ids") == [kb_id])
 
-    lc = det.get("llm_config") or {}
-    check("B", "B04", "api_key_set=true + masked", lc.get("api_key_set") is True and "****" in (lc.get("api_key_masked") or ""), str(lc))
-    all_resp = api("GET", "/api/v1/apps", admin_token).text + json.dumps(det, ensure_ascii=False)
-    check("B", "B05", "响应无明文 key", "sk-plain-1234567890abcdef" not in all_resp)
-    enc = psql(f"SELECT llm_config->>'api_key_enc' FROM apps WHERE id='{app_id}'")
-    check("B", "B06", "PG 存 AES 密文非明文", bool(enc) and "sk-plain" not in enc and len(enc) > 40, enc[:60])
+    # B04-B06 凭据专项：用独立一次性应用塞假 key（避免污染主应用的真实 LLM 调用）
+    rc = api("POST", "/api/v1/apps", admin_token, json={
+        "name": TAG + "cred", "llm_config": {"model": "", "api_key": "sk-plain-1234567890abcdef"}})
+    if rc.status_code == 201:
+        cred_id = rc.json()["id"]
+        _cleanup.append(("app", cred_id))
+        cdet = api("GET", f"/api/v1/apps/{cred_id}", admin_token).json()
+        lc = cdet.get("llm_config") or {}
+        check("B", "B04", "api_key_set=true + masked", lc.get("api_key_set") is True and "****" in (lc.get("api_key_masked") or ""), str(lc))
+        all_resp = api("GET", "/api/v1/apps", admin_token).text + json.dumps(cdet, ensure_ascii=False)
+        check("B", "B05", "响应无明文 key", "sk-plain-1234567890abcdef" not in all_resp)
+        enc = psql(f"SELECT llm_config->>'api_key_enc' FROM apps WHERE id='{cred_id}'")
+        check("B", "B06", "PG 存 AES 密文非明文", bool(enc) and "sk-plain" not in enc and len(enc) > 40, enc[:60])
+        api("DELETE", f"/api/v1/apps/{cred_id}", admin_token)
+        _cleanup.remove(("app", cred_id))
+    else:
+        check("B", "B04", "api_key_set=true + masked", False, f"凭据应用创建失败 HTTP {rc.status_code}")
+        check("B", "B05", "响应无明文 key", None, "跳过")
+        check("B", "B06", "PG 存 AES 密文非明文", None, "跳过")
 
     rk = api("POST", f"/api/v1/apps/{app_id}/api-keys", admin_token, json={"name": TAG + "key"})
     ok_k = check("B", "B07", "创建 API Key", rk.status_code == 201 and rk.json().get("key", "").startswith("nx-"), f"{rk.status_code} {rk.text[:80]}")

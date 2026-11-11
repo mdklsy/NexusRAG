@@ -1,6 +1,7 @@
 """重排：对检索候选二次排序。
 
 - llm：零额外依赖，LLM 按相关度打分（默认候选 ≤10 条，成本可控）
+- api：托管 Rerank API（SiliconFlow/Jina/Cohere 风格 /rerank，失败容错）
 - cross_encoder：可选重依赖，安装 backend/pip install ".[rerank]" 后可用
 """
 
@@ -86,6 +87,42 @@ async def cross_encoder_rerank(
     return [c for c, _ in paired]
 
 
+async def api_rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """托管 Rerank API（SiliconFlow/Jina/Cohere 风格 /rerank）；失败容错原样返回。"""
+    if len(chunks) <= 1:
+        return chunks
+    from app.core.config import get_settings
+
+    cfg = get_settings()
+    if not (cfg.rerank_api_base and cfg.rerank_api_key):
+        logger.warning("rerank=api 但 RERANK_API_BASE/KEY 未配置，跳过重排")
+        return chunks
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(
+            trust_env=False, timeout=15  # 绕过系统代理：直连托管 API
+        ) as client:
+            resp = await client.post(
+                cfg.rerank_api_base.rstrip("/") + "/rerank",
+                headers={"Authorization": f"Bearer {cfg.rerank_api_key}"},
+                json={
+                    "model": cfg.rerank_model,
+                    "query": query,
+                    "documents": [c.content[:1500] for c in chunks],
+                    "top_n": len(chunks),
+                },
+            )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        # results: [{index, relevance_score}] → 按分数降序映射回候选
+        ordered = sorted(results, key=lambda r: -float(r.get("relevance_score", 0)))
+        return [chunks[r["index"]] for r in ordered if 0 <= r["index"] < len(chunks)]
+    except Exception as e:  # noqa: BLE001 重排失败不阻塞主链路
+        logger.warning("api rerank failed: %s", e)
+        return chunks
+
+
 async def rerank_chunks(
     llm, mode: str, query: str, chunks: list[RetrievedChunk]
 ) -> list[RetrievedChunk]:
@@ -95,5 +132,7 @@ async def rerank_chunks(
         return await llm_rerank(llm, query, chunks)
     if mode == "cross_encoder":
         return await cross_encoder_rerank(query, chunks)
+    if mode == "api":
+        return await api_rerank(query, chunks)
     logger.warning("unknown rerank mode: %s, skip", mode)
     return chunks

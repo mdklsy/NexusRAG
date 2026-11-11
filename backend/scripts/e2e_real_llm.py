@@ -110,7 +110,8 @@ def main() -> int:
     rap = api("POST", "/api/v1/apps", json={
         "name": f"[real-llm-{SUF}] app", "system_prompt": "你是 NexusRAG 产品助手，仅依据资料回答。",
         "kb_ids": [kb_id],
-        "retrieval_config": {"top_k": 3, "use_kg": True, "use_bm25": True, "intent_route": True}})
+        "retrieval_config": {"top_k": 5, "use_kg": True, "use_bm25": True, "intent_route": True,
+                             "rerank": "api"}})
     app_id = rap.json()["id"]
 
     def sse(question: str) -> tuple[list[dict], int]:
@@ -145,6 +146,14 @@ def main() -> int:
     intent2 = next((x.get("intent") for x in events2 if x.get("type") == "intent"), "?")
     deltas2 = "".join(x.get("content", "") for x in events2 if x.get("type") == "delta")
     step("闲聊意图识别 + 直答", intent2 in ("chitchat", "chat", "smalltalk", "small_talk"), f"intent={intent2} answer={deltas2[:60]}")
+
+    print("== 3.5 检索调试（真实向量 + api 重排链路） ==")
+    rr = api("POST", "/api/v1/retrievals", json={"app_id": app_id, "query": "NexusRAG 的检索能力有哪些", "top_k": 5})
+    rok = rr.status_code == 200
+    rd = rr.json() if rok else {}
+    step("检索 API 200 + chunks 非空", rok and len(rd.get("chunks", [])) > 0,
+         f"HTTP {rr.status_code} n={len(rd.get('chunks', [])) if isinstance(rd, dict) else '?'}")
+    step("KG 事实注入", rok and len(rd.get("graph_facts", [])) > 0, str(rd.get("graph_facts", [])[:2]))
 
     print("== 4. 评测链路（真实 LLM judge） ==")
     res = api("POST", f"/api/v1/apps/{app_id}/eval-sets", json={

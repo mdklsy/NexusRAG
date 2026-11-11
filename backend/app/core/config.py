@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     embedding_model: str = "embedding-3"
     embedding_dim: int = 1024
 
+    # Rerank API（Cohere 风格 POST /rerank：SiliconFlow / Jina / Cohere 均兼容）
+    rerank_api_base: str = ""  # 空 = 未配置；如 https://api.siliconflow.cn/v1
+    rerank_api_key: str = ""
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+
     # 初始管理员
     admin_email: str = "admin@nexusrag.local"
     admin_password: str = "admin123"
