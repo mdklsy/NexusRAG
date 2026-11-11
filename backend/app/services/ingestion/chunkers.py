@@ -80,6 +80,11 @@ def chunk_text(
         for prev, cur in zip(blocks, blocks[1:], strict=False):
             tail = prev[-overlap:]
             if not cur.startswith(tail):
+                # 块边界在原文是分隔符处（段落/句子边界，piece 曾被 strip）；
+                # cur 以结构性标记开头（围栏/标题/表格/列表）时补换行，
+                # 防止 "## 标题```" 这类行被粘出、heading 元数据抓脏
+                if re.match(r"^(```|#{1,6}\s|\||[-*+]\s|\d+[.、]\s)", cur):
+                    tail += "\n"
                 overlapped.append(tail + cur)
             else:
                 overlapped.append(cur)

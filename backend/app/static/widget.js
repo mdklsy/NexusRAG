@@ -162,6 +162,16 @@
       theme +
       ";color:#fff;margin-left:auto}" +
       ".m-a{background:#fff;border:1px solid #eceef2}" +
+      ".m-a .txt{white-space:normal}" +
+      ".txt p{margin:6px 0}" +
+      ".txt h1,.txt h2,.txt h3,.txt h4,.txt h5{margin:8px 0 4px;font-size:14px;font-weight:700}" +
+      ".txt ul,.txt ol{margin:4px 0;padding-left:18px}" +
+      ".txt li{margin:2px 0}" +
+      ".txt code{background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;font-family:Consolas,Menlo,monospace;font-size:12.5px}" +
+      ".txt pre{background:#f6f8fa;border:1px solid #eceef2;padding:8px;border-radius:6px;overflow:auto;margin:6px 0}" +
+      ".txt pre code{background:none;padding:0}" +
+      ".txt strong{font-weight:600}" +
+      ".txt a{color:#1c6eff}" +
       ".cites{margin-top:6px;padding-top:6px;border-top:1px dashed #e0e0e0;font-size:11px;color:#888}" +
       ".cites span{display:inline-block;background:#f0f2f5;border-radius:4px;padding:1px 6px;margin:2px 4px 0 0;color:#555}" +
       ".tools{font-size:11px;color:#999;margin-bottom:4px}" +
@@ -182,6 +192,63 @@
     );
   }
 
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function inlineMd(s) {
+    return s
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+  // 轻量 Markdown：标题 / 无序有序列表 / 粗斜体 / 行内码 / 围栏代码块 / 链接 / 段落。
+  // 全程先 escapeHtml 再套标签，LLM 输出里的 HTML 不会被执行。
+  function renderMarkdown(src) {
+    var lines = escapeHtml(src).split("\n");
+    var out = [], inCode = false, codeBuf = [], listTag = null;
+    function closeList() {
+      if (listTag) { out.push("</" + listTag + ">"); listTag = null; }
+    }
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (/^```/.test(line.trim())) {
+        if (inCode) { out.push("<pre><code>" + codeBuf.join("\n") + "</code></pre>"); codeBuf = []; inCode = false; }
+        else { closeList(); inCode = true; }
+        continue;
+      }
+      if (inCode) { codeBuf.push(line); continue; }
+      var h = line.match(/^(#{1,6})\s+(.*)$/);
+      if (h) {
+        closeList();
+        var lv = Math.min(h[1].length + 1, 5);
+        out.push("<h" + lv + ">" + inlineMd(h[2]) + "</h" + lv + ">");
+        continue;
+      }
+      var li = line.match(/^\s*[-*+]\s+(.*)$/);
+      var oli = line.match(/^\s*(\d+)[.、]\s+(.*)$/);
+      if (li) {
+        if (listTag !== "ul") { closeList(); out.push("<ul>"); listTag = "ul"; }
+        out.push("<li>" + inlineMd(li[1]) + "</li>");
+        continue;
+      }
+      if (oli) {
+        if (listTag !== "ol") { closeList(); out.push("<ol>"); listTag = "ol"; }
+        out.push("<li>" + inlineMd(oli[2]) + "</li>");
+        continue;
+      }
+      if (!line.trim()) { closeList(); continue; }
+      closeList();
+      out.push("<p>" + inlineMd(line) + "</p>");
+    }
+    if (inCode) out.push("<pre><code>" + codeBuf.join("\n") + "</code></pre>");
+    closeList();
+    return out.join("");
+  }
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -307,7 +374,8 @@
             bubbleEl.appendChild(txt);
             bubbleEl.__txt = txt;
           }
-          bubbleEl.__txt.textContent += ev.content;
+          bubbleEl.__raw = (bubbleEl.__raw || "") + ev.content;
+          bubbleEl.__txt.innerHTML = renderMarkdown(bubbleEl.__raw);
           scrollBottom();
         } else if (ev.type === "citations") {
           citations = ev.citations;
@@ -320,8 +388,13 @@
         }
         if (citations && citations.length) {
           var c = el("div", "cites", "来源：");
+          var seenCite = {};
           citations.forEach(function (ct) {
-            c.appendChild(el("span", null, "[" + ct.index + "] " + ct.document_name));
+            var head = ct.heading ? " · " + String(ct.heading).slice(0, 24) : "";
+            var label = "[" + ct.index + "] " + ct.document_name + head;
+            if (seenCite[label]) return;
+            seenCite[label] = 1;
+            c.appendChild(el("span", null, label));
           });
           bubbleEl.appendChild(c);
         }
