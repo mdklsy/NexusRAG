@@ -101,11 +101,19 @@
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
         var buffer = "";
+        // done 只允许触发一次：[DONE] 帧和流关闭（r.done）都可能到达，
+        // 不加守卫会把完成回调（含引用渲染）执行两遍
+        var finished = false;
+        function finish() {
+          if (finished) return;
+          finished = true;
+          done();
+        }
         function pump() {
           reader
             .read()
             .then(function (r) {
-              if (r.done) return done();
+              if (r.done) return finish();
               buffer += decoder.decode(r.value, { stream: true });
               var blocks = buffer.split("\n\n");
               buffer = blocks.pop() || "";
@@ -113,7 +121,7 @@
                 var line = block.trim();
                 if (line.indexOf("data:") !== 0) return;
                 var payload = line.slice(5).trim();
-                if (payload === "[DONE]") return done();
+                if (payload === "[DONE]") return finish();
                 try {
                   onEvent(JSON.parse(payload));
                 } catch (e) {
