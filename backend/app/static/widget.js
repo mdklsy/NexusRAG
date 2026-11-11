@@ -86,6 +86,9 @@
     busy: false,
     conversationId: null,
     messages: [],
+    // 历史懒加载游标：convs 按更新时间倒序（[0] 最新），convIdx=-1 表示还没进历史链；
+    // 发送目标恒为 state.conversationId（最新会话），往上翻阅旧会话不影响回复落点
+    hist: { convs: [], convIdx: -1, hasMore: false, oldestId: null, loading: false, loaded: false, done: false },
   };
 
   // ---------- SSE ----------
@@ -199,13 +202,11 @@
       theme +
       ";color:#fff;border:none;border-radius:8px;width:40px;font-size:16px;cursor:pointer}" +
       ".ft button:disabled{opacity:.5}" +
-      ".hist-btn{cursor:pointer;font-size:12px;opacity:.92;padding:3px 9px;border:1px solid rgba(255,255,255,.55);border-radius:6px;white-space:nowrap}" +
-      ".hist-item{background:#fff;border:1px solid #eceef2;border-radius:8px;padding:9px 12px;margin-bottom:8px;cursor:pointer}" +
-      ".hist-item:hover{border-color:#c9d7ff;background:#f6f9ff}" +
-      ".hist-title{font-size:13px;color:#333;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}" +
-      ".hist-time{font-size:11px;color:#999;margin-top:2px}" +
-      ".hist-back{font-size:13px;color:#1c6eff;cursor:pointer;margin-bottom:10px}" +
-      ".hist-empty{color:#999;font-size:13px;text-align:center;padding:30px 0}" +
+      ".new-btn{cursor:pointer;font-size:12px;opacity:.92;padding:3px 9px;border:1px solid rgba(255,255,255,.55);border-radius:6px;white-space:nowrap}" +
+      // 下拉懒加载：顶部加载指示 / 跨会话分隔条 / 到底提示
+      ".hist-loading{text-align:center;font-size:12px;color:#999;padding:6px 0}" +
+      ".hist-divider{text-align:center;font-size:11px;color:#aaa;margin:10px 0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
+      ".hist-end{text-align:center;font-size:11px;color:#bbb;padding:4px 0 8px}" +
       "@media (max-width:480px){.panel{right:8px;left:8px;width:auto;bottom:84px}}"
     );
   }
@@ -291,9 +292,9 @@
     var closeBtn = el("div", "x", "✕");
     hd.appendChild(hdTitle);
     if (state.cfg.userId) {
-      var histBtn = el("div", "hist-btn", "历史");
-      histBtn.addEventListener("click", openHistory);
-      hd.appendChild(histBtn);
+      var newBtn = el("div", "new-btn", "新对话");
+      newBtn.addEventListener("click", startNewConversation);
+      hd.appendChild(newBtn);
     }
     hd.appendChild(closeBtn);
 
@@ -321,13 +322,19 @@
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter") send();
     });
+    // 下拉懒加载：滚到顶部时拉更早的记录（跨会话自动续链）
+    body.addEventListener("scroll", function () {
+      if (body.scrollTop <= 0) pullOlder();
+    });
   }
 
   function toggle() {
     state.open = !state.open;
     ui.panel.classList.toggle("open", state.open);
     if (state.open && !ui.body.children.length) {
-      appendBot(state.cfg.welcome);
+      // 有身份的终端用户：打开即续接最近会话（最新一页），更早的下拉加载
+      if (state.cfg.userId && state.cfg.sig) loadLatest();
+      else appendBot(state.cfg.welcome);
     }
     if (state.open) ui.input.focus();
   }
@@ -383,65 +390,147 @@
     bubbleEl.appendChild(c);
   }
 
-  function openHistory() {
-    if (state.busy) return;
-    var base = state.cfg.baseUrl.replace(/\/$/, "");
-    fetch(base + "/api/v1/chat/conversations?" + authQuery(), { headers: authHeaders() })
+  // ---------- 下拉懒加载历史 ----------
+  // 打开面板续接最近会话（最新一页）；滚到顶部按页拉更早的记录，
+  // 当前会话翻完自动接更早的会话（分隔条标注），全部翻完显示到底提示。
+  // 发送目标恒为最新会话，翻阅旧会话不影响回复落点。
+
+  function histBase() {
+    return state.cfg.baseUrl.replace(/\/$/, "") + "/api/v1/chat";
+  }
+
+  function fetchPage(convId, before) {
+    var url =
+      histBase() + "/conversations/" + convId + "/messages?" +
+      authQuery() + "&limit=30" + (before ? "&before=" + encodeURIComponent(before) : "");
+    return fetch(url, { headers: authHeaders() }).then(function (r) {
+      if (!r.ok) return apiError(r);
+      return r.json();
+    });
+  }
+
+  // 历史消息渲染（与流式回复同一套样式）：user 纯文本，assistant 走 Markdown + 引用
+  function buildMsg(m) {
+    if (m.role === "user") return el("div", "msg m-u", m.content);
+    if (m.role !== "assistant") return null;
+    var b = el("div", "msg m-a");
+    var txt = el("span", "txt");
+    txt.innerHTML = renderMarkdown(m.content);
+    b.appendChild(txt);
+    if (m.citations && m.citations.length) renderCites(b, m.citations);
+    return b;
+  }
+
+  function prependNode(node) {
+    if (!node) return;
+    ui.body.insertBefore(node, ui.body.firstChild);
+  }
+
+  function loadLatest() {
+    var typing = showTyping();
+    fetch(histBase() + "/conversations?" + authQuery(), { headers: authHeaders() })
       .then(function (r) {
         if (!r.ok) return apiError(r);
         return r.json();
       })
       .then(function (list) {
-        ui.body.innerHTML = "";
-        var back = el("div", "hist-back", "‹ 返回当前对话");
-        back.addEventListener("click", function () {
-          ui.body.innerHTML = "";
+        typing.remove();
+        var h = state.hist;
+        h.convs = list || [];
+        h.loaded = true;
+        if (!h.convs.length) {
+          h.done = true;
           appendBot(state.cfg.welcome);
+          return;
+        }
+        h.convIdx = 0;
+        state.conversationId = h.convs[0].id;
+        return fetchPage(h.convs[0].id, null).then(function (page) {
+          page.messages.forEach(function (m) {
+            var node = buildMsg(m);
+            if (node) ui.body.appendChild(node);
+          });
+          h.oldestId = page.messages.length ? page.messages[0].id : null;
+          h.hasMore = page.has_more;
+          if (!page.messages.length) appendBot(state.cfg.welcome);
+          scrollBottom();
         });
-        ui.body.appendChild(back);
-        if (!list.length) ui.body.appendChild(el("div", "hist-empty", "该身份下还没有历史会话"));
-        list.forEach(function (c) {
-          var item = el("div", "hist-item");
-          item.appendChild(el("div", "hist-title", c.title || "未命名对话"));
-          item.appendChild(el("div", "hist-time", String(c.updated_at || "").replace("T", " ").slice(0, 16)));
-          item.addEventListener("click", function () { loadConversation(c.id); });
-          ui.body.appendChild(item);
-        });
-        ui.body.scrollTop = 0;
       })
       .catch(function (e) {
-        appendBot("⚠️ 历史会话加载失败: " + (e && e.message ? e.message : e));
+        if (typing.parentNode) typing.remove();
+        appendBot(state.cfg.welcome);
+        appendBot("⚠️ 历史记录加载失败: " + (e && e.message ? e.message : e));
       });
   }
 
-  function loadConversation(id) {
-    var base = state.cfg.baseUrl.replace(/\/$/, "");
-    fetch(base + "/api/v1/chat/conversations/" + id + "/messages?" + authQuery(), {
-      headers: authHeaders(),
-    })
-      .then(function (r) {
-        if (!r.ok) return apiError(r);
-        return r.json();
-      })
-      .then(function (msgs) {
-        ui.body.innerHTML = "";
-        state.conversationId = id;
-        try { sessionStorage.setItem("nx_chat_" + id, id); } catch (e) {}
-        msgs.forEach(function (m) {
-          if (m.role === "user") { appendUser(m.content); return; }
-          if (m.role !== "assistant") return;
-          var b = appendBot("");
-          var txt = el("span", "txt");
-          b.appendChild(txt);
-          txt.innerHTML = renderMarkdown(m.content);
-          if (m.citations && m.citations.length) renderCites(b, m.citations);
-        });
-        if (!msgs.length) appendBot("（该会话没有消息记录）");
-        scrollBottom();
-      })
-      .catch(function (e) {
-        appendBot("⚠️ 历史记录加载失败: " + (e && e.message ? e.message : e));
+  function pullOlder() {
+    var h = state.hist;
+    if (!state.cfg.userId || !h.loaded || h.loading || h.done || !state.open) return;
+    // 判断还有没有可拉的内容：当前会话有更早页，或还有更早的会话
+    var convExhausted = h.convIdx >= 0 && !h.hasMore;
+    if (convExhausted && h.convIdx + 1 >= h.convs.length) {
+      h.done = true;
+      prependNode(el("div", "hist-end", "— 已加载全部历史记录 —"));
+      return;
+    }
+    h.loading = true;
+    var prevH = ui.body.scrollHeight;
+    var loader = el("div", "hist-loading", "加载更早的记录…");
+    prependNode(loader);
+    var work;
+    if (h.convIdx >= 0 && h.hasMore) {
+      // 当前会话往上翻一页
+      work = fetchPage(h.convs[h.convIdx].id, h.oldestId).then(function (page) {
+        // prepend 是逐条插到最顶上：按升序正着插会把整批倒过来，必须逆序遍历
+        for (var i = page.messages.length - 1; i >= 0; i--) {
+          var m = page.messages[i];
+          prependNode(buildMsg(m));
+          h.oldestId = m.id;
+        }
+        h.hasMore = page.has_more;
       });
+    } else {
+      // 当前会话翻完 → 接更早的会话
+      h.convIdx += 1;
+      var conv = h.convs[h.convIdx];
+      var label = conv.title || "未命名对话";
+      var time = String(conv.updated_at || "").replace("T", " ").slice(0, 16);
+      var divider = el("div", "hist-divider", "— 更早 · " + label + " · " + time + " —");
+      work = fetchPage(conv.id, null).then(function (page) {
+        for (var j = page.messages.length - 1; j >= 0; j--) {
+          var m2 = page.messages[j];
+          prependNode(buildMsg(m2));
+          h.oldestId = m2.id;
+        }
+        prependNode(divider); // 分隔条最后插，落在这批更早消息的最上方
+        h.hasMore = page.has_more;
+      });
+    }
+    work
+      .catch(function (e) {
+        prependNode(el("div", "hist-end", "⚠️ 加载失败: " + (e && e.message ? e.message : e)));
+      })
+      .then(function () {
+        loader.remove();
+        // 保持视口稳定：内容向前插入了 delta 高度，滚动位置同步下移
+        ui.body.scrollTop = ui.body.scrollHeight - prevH;
+        h.loading = false;
+        // 一次下拉可能仍停在顶部（比如刚跨到只有少量消息的旧会话），继续补拉
+        if (ui.body.scrollTop <= 0) pullOlder();
+      });
+  }
+
+  function startNewConversation() {
+    if (state.busy) return;
+    state.conversationId = null; // 下一条消息由服务端新建会话
+    var h = state.hist;
+    h.convIdx = -1;
+    h.hasMore = false;
+    h.oldestId = null;
+    h.done = false;
+    // convs 保留：新会话产生后，旧会话自然成为下拉链上的“更早历史”
+    ui.body.innerHTML = "";
+    appendBot(state.cfg.welcome);
   }
 
   function showTyping() {
@@ -475,9 +564,6 @@
       function (ev) {
         if (ev.type === "conversation") {
           state.conversationId = ev.conversation_id;
-          try {
-            sessionStorage.setItem("nx_chat_" + ev.conversation_id, ev.conversation_id);
-          } catch (e) {}
         } else if (ev.type === "tool_call") {
           toolLines.push("⚙ 调用 " + ev.name + "…");
         } else if (ev.type === "tool_result") {

@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_app_by_api_key, get_current_user
@@ -216,10 +216,18 @@ async def widget_messages(
     end_user_id: str,
     ts: int,
     sig: str,
+    limit: int = 30,
+    before: uuid.UUID | None = None,
     authorization: str = Header(default=""),
     session: AsyncSession = Depends(get_session),
 ):
-    """按终端用户取某会话的消息（归属校验：应用 + end_user 双匹配）。"""
+    """按终端用户取某会话的消息（归属校验：应用 + end_user 双匹配）。
+
+    游标分页（挂件下拉懒加载）：不传 before 返回最新 limit 条（升序）；
+    传 before=消息 id 则返回该消息之前的 limit 条。has_more 告知是否还有更早的。
+    created_at 是事务时间（同事务插入的行相同），游标用 (created_at, id) 元组。
+    """
+    limit = max(1, min(limit, 100))
     app = await get_app_by_api_key(authorization=authorization, session=session)
     _verify_user_sig(app, end_user_id, ts, sig)
     conv = await session.get(Conversation, conversation_id)
@@ -229,23 +237,40 @@ async def widget_messages(
         or conv.end_user_id != end_user_id
     ):
         raise HTTPException(404, "会话不存在")
+
+    filters = [Message.conversation_id == conversation_id]
+    if before is not None:
+        cursor = await session.get(Message, before)
+        if cursor is None or cursor.conversation_id != conversation_id:
+            raise HTTPException(404, "游标消息不存在")
+        filters.append(
+            tuple_(Message.created_at, Message.id)
+            < tuple_(cursor.created_at, cursor.id)
+        )
     rows = (
         (
             await session.execute(
                 select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at, Message.id)
+                .where(*filters)
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(limit + 1)
             )
         )
         .scalars()
         .all()
     )
-    return [
-        {
-            "role": m.role,
-            "content": m.content,
-            "citations": m.citations or [],
-            "created_at": m.created_at,
-        }
-        for m in rows
-    ]
+    has_more = len(rows) > limit
+    rows = list(reversed(rows[:limit]))
+    return {
+        "messages": [
+            {
+                "id": str(m.id),
+                "role": m.role,
+                "content": m.content,
+                "citations": m.citations or [],
+                "created_at": m.created_at,
+            }
+            for m in rows
+        ],
+        "has_more": has_more,
+    }
