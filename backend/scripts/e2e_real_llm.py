@@ -68,15 +68,18 @@ def main() -> int:
         print(f"  {'✓' if ok else '✗'} {name}" + ("" if ok else f"  -- {detail[:120]}"))
 
     print("== 0. 配置检查 ==")
-    mock_like = ("9999" in llm_base or "mock" in llm_key.lower()
-                 or "9999" in emb_base or "mock" in emb_key.lower())
-    if mock_like or not (llm_key and emb_key):
-        print("✗ .env 仍是 mock 配置或缺少 key。请先填：")
+    llm_mock = not llm_key or "mock" in llm_key.lower() or "9999" in llm_base
+    emb_mock = "9999" in emb_base or "mock" in emb_key.lower()
+    if llm_mock:
+        print("✗ .env 的 LLM_* 仍是 mock 配置。请填入真实对话模型：")
         print("    LLM_API_BASE / LLM_API_KEY / LLM_MODEL")
-        print("    EMBEDDING_API_BASE / EMBEDDING_API_KEY / EMBEDDING_MODEL")
         print("  然后：docker compose up -d api worker  （让容器读到新配置）")
         return 1
-    step("配置非 mock", True, f"base={llm_base} model={model}")
+    if emb_mock:
+        step("LLM 配置为真实模型", True, f"base={llm_base} model={model}")
+        step("embedding=本地 mock（DeepSeek 无向量接口，检索确定性向量）", True, "允许：向量环节不依赖真模型")
+    else:
+        step("LLM+embedding 均为真实配置", True, f"llm={model} emb={emb_model}")
 
     c = httpx.Client(trust_env=False, timeout=90)
     token = c.post(API + "/api/v1/auth/login",
@@ -100,8 +103,8 @@ def main() -> int:
         st = api("GET", f"/api/v1/documents/{doc_id}").json()["status"]
         if st in ("completed", "failed"):
             break
-    step("真实向量摄取 completed", st == "completed",
-         f"status={st} err={api('GET', f'/api/v1/documents/{doc_id}').json().get('error', '')[:80]}")
+    err = api("GET", f"/api/v1/documents/{doc_id}").json().get("error") or ""
+    step("真实向量摄取 completed", st == "completed", f"status={st} err={str(err)[:120]}")
 
     print("== 2. 真实 LLM 对话（SSE + 引用） ==")
     rap = api("POST", "/api/v1/apps", json={
