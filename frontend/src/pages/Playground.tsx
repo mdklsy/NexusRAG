@@ -132,11 +132,12 @@ export default function Playground() {
             style={{ width: 220 }}
             placeholder="选择应用"
             value={appId}
-            onChange={() => {
+            onChange={(v) => {
+              setAppId(v);
               setMessages([]);
               conversationRef.current = null;
             }}
-            options={(apps || []).map((a) => ({ value: a.id, label: `${a.icon} ${a.name}` }))}
+            options={(apps || []).map((a) => ({ value: a.id, label: a.name }))}
           />
           <Button
             onClick={() => {

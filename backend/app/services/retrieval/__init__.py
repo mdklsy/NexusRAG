@@ -123,7 +123,10 @@ async def retrieve(
         # ---------- 重排 ----------
         if rerank_mode != "none" and len(result.chunks) > 1:
             llm = get_llm_client()
-            result.chunks = await rerank_chunks(llm, rerank_mode, query, result.chunks)
+            result.chunks = await rerank_chunks(
+                llm, rerank_mode, query, result.chunks,
+                rerank_cfg=config.get("rerank_config"),
+            )
         result.chunks = result.chunks[:top_k]
 
     # ---------- KG 增强 ----------

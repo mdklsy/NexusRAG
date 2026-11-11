@@ -1,6 +1,7 @@
 import {
   Alert,
   Button,
+  ColorPicker,
   Card,
   Radio,
   Tabs,
@@ -104,6 +105,7 @@ function ConfigForm({
   const kgOn = Form.useWatch(["retrieval_config", "use_kg"], form);
   const rerank = Form.useWatch(["retrieval_config", "rerank"], form);
   const bubbleVal = Form.useWatch(["widget_config", "bubble"], form) as string | undefined;
+  const rerankCfg = Form.useWatch(["retrieval_config", "rerank_config"], form) as any;
   return (
     <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
       <Tabs
@@ -278,27 +280,53 @@ function ConfigForm({
             { value: "none", label: "不重排" },
             { value: "api", label: "托管 API 重排（推荐）" },
             { value: "llm", label: "LLM 重排（让对话模型打分）" },
-            { value: "cross_encoder", label: "本地 Cross-Encoder（需装依赖）" },
           ]}
         />
       </Form.Item>
       {rerank === "api" && (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="托管重排使用全局配置，应用内无需填写"
-          description="在「设置」页配置重排服务的 API Base / Key（默认模型 BAAI/bge-reranker-v2-m3，硅基流动免费档）；旧版 .env 方式仍兼容。"
-        />
-      )}
-      {rerank === "cross_encoder" && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="本地 Cross-Encoder 需要在 backend 安装可选依赖"
-          description="pip install '.[rerank]'（会拉起 sentence-transformers，较重）；轻量部署建议用托管 API 重排。"
-        />
+        <>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="默认使用「设置」页的全局重排配置；下方留空即用全局，填写后按本应用覆盖"
+          />
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item
+                name={["retrieval_config", "rerank_config", "api_base"]}
+                label="API Base"
+                extra={<span style={{ fontSize: 12 }}>留空 = 全局配置</span>}
+              >
+                <Input placeholder="如 https://api.siliconflow.cn/v1" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name={["retrieval_config", "rerank_config", "model"]}
+                label="模型名"
+                extra={<span style={{ fontSize: 12 }}>留空 = 全局配置</span>}
+              >
+                <Input placeholder="BAAI/bge-reranker-v2-m3" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name={["retrieval_config", "rerank_config", "api_key"]}
+                label="API Key"
+                extra={
+                  <span style={{ fontSize: 12 }}>
+                    {rerankCfg?.api_key_masked
+                      ? `已设置 ${rerankCfg.api_key_masked}，留空保持`
+                      : "留空 = 全局配置"}
+                  </span>
+                }
+              >
+                <Input.Password placeholder="粘贴密钥（AES 加密存储）" />
+              </Form.Item>
+            </Col>
+          </Row>
+        </>
       )}
       {rerank === "llm" && (
         <Alert
@@ -335,9 +363,10 @@ function ConfigForm({
             name={["widget_config", "theme"]}
             label="主题色"
             tooltip="挂件按钮与气泡的主色调"
-            extra={<span style={{ fontSize: 12 }}>#hex，如 #1677ff</span>}
+            extra={<span style={{ fontSize: 12 }}>选色器取色，或直接输入 #hex</span>}
+            getValueFromEvent={(c: any) => (typeof c === "string" ? c : c?.toHexString?.() ?? c)}
           >
-            <Input placeholder="#1677ff" />
+            <ColorPicker showText disabledAlpha format="hex" defaultValue="#1677ff" />
           </Form.Item>
         </Col>
         <Col span={8}>

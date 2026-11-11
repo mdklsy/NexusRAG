@@ -87,15 +87,34 @@ async def cross_encoder_rerank(
     return [c for c, _ in paired]
 
 
-async def api_rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
-    """托管 Rerank API（SiliconFlow/Jina/Cohere 风格 /rerank）；失败容错原样返回。"""
+async def api_rerank(
+    query: str,
+    chunks: list[RetrievedChunk],
+    override: dict | None = None,
+) -> list[RetrievedChunk]:
+    """托管 Rerank API（SiliconFlow/Jina/Cohere 风格 /rerank）；失败容错原样返回。
+
+    override 为应用级覆盖（retrieval_config.rerank_config）：
+    api_base / model 明文，api_key_enc 为应用密文——缺省回退全局（设置页/.env）。
+    """
     if len(chunks) <= 1:
         return chunks
     from app.core import runtime_settings
 
     await runtime_settings.ensure_fresh()
-    cfg = runtime_settings.get_global("rerank")
-    if not (cfg["api_base"] and cfg["api_key"]):
+    g = runtime_settings.get_global("rerank")
+    ov = dict(override or {})
+    if ov.get("api_key_enc"):
+        from app.core.crypto import decrypt_secret
+
+        try:
+            ov["api_key"] = decrypt_secret(ov["api_key_enc"])
+        except Exception:  # noqa: BLE001 解密失败回退全局
+            ov["api_key"] = ""
+    api_base = ov.get("api_base") or g["api_base"]
+    model = ov.get("model") or g["model"]
+    api_key = ov.get("api_key") or g["api_key"]
+    if not (api_base and api_key):
         logger.warning("rerank=api 但托管重排未配置（设置页 / .env RERANK_API_*），跳过重排")
         return chunks
     try:
@@ -105,10 +124,10 @@ async def api_rerank(query: str, chunks: list[RetrievedChunk]) -> list[Retrieved
             trust_env=False, timeout=15  # 绕过系统代理：直连托管 API
         ) as client:
             resp = await client.post(
-                cfg["api_base"].rstrip("/") + "/rerank",
-                headers={"Authorization": f"Bearer {cfg['api_key']}"},
+                api_base.rstrip("/") + "/rerank",
+                headers={"Authorization": f"Bearer {api_key}"},
                 json={
-                    "model": cfg["model"],
+                    "model": model,
                     "query": query,
                     "documents": [c.content[:1500] for c in chunks],
                     "top_n": len(chunks),
@@ -125,7 +144,11 @@ async def api_rerank(query: str, chunks: list[RetrievedChunk]) -> list[Retrieved
 
 
 async def rerank_chunks(
-    llm, mode: str, query: str, chunks: list[RetrievedChunk]
+    llm,
+    mode: str,
+    query: str,
+    chunks: list[RetrievedChunk],
+    rerank_cfg: dict | None = None,
 ) -> list[RetrievedChunk]:
     if not chunks or mode in ("", "none", None):
         return chunks
@@ -134,6 +157,6 @@ async def rerank_chunks(
     if mode == "cross_encoder":
         return await cross_encoder_rerank(query, chunks)
     if mode == "api":
-        return await api_rerank(query, chunks)
+        return await api_rerank(query, chunks, override=rerank_cfg)
     logger.warning("unknown rerank mode: %s, skip", mode)
     return chunks

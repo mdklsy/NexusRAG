@@ -50,6 +50,7 @@ async def list_apps(
     for a in apps:
         data = AppOut.model_validate(a).model_dump()
         data["llm_config"] = _sanitize_llm_config(a.llm_config)
+        data["retrieval_config"] = _sanitize_retrieval_config(a.retrieval_config)
         out.append(AppDetailOut(**data, kb_ids=kb_map.get(a.id, [])))
     return out
 
@@ -67,6 +68,40 @@ def _prepare_llm_config(cfg: dict | None) -> dict:
     return cfg
 
 
+def _prepare_retrieval_config(cfg: dict | None) -> dict:
+    """入库前处理 retrieval_config：rerank_config.api_key 明文 → AES 密文。"""
+    cfg = dict(cfg or {})
+    rr = dict(cfg.get("rerank_config") or {})
+    plain = rr.pop("api_key", "")
+    rr.pop("clear_api_key", None)
+    if plain:
+        from app.core.crypto import encrypt_secret
+
+        rr["api_key_enc"] = encrypt_secret(plain)
+    if rr:
+        cfg["rerank_config"] = rr
+    else:
+        cfg.pop("rerank_config", None)
+    return cfg
+
+
+def _sanitize_retrieval_config(cfg: dict | None) -> dict:
+    """出库时：rerank_config 密文 → 打码状态，避免泄漏。"""
+    cfg = dict(cfg or {})
+    rr = dict(cfg.get("rerank_config") or {})
+    enc = rr.pop("api_key_enc", None)
+    if enc:
+        from app.core.crypto import mask_secret
+
+        rr["api_key_set"] = True
+        rr["api_key_masked"] = mask_secret(enc, encrypted=True)
+    if rr:
+        cfg["rerank_config"] = rr
+    else:
+        cfg.pop("rerank_config", None)
+    return cfg
+
+
 def _sanitize_llm_config(cfg: dict | None) -> dict:
     """出库时：密文 → 打码，避免泄漏。"""
     cfg = dict(cfg or {})
@@ -79,6 +114,7 @@ def _sanitize_llm_config(cfg: dict | None) -> dict:
 def _app_detail(app: App, kb_ids: list) -> AppDetailOut:
     out = AppOut.model_validate(app).model_dump()
     out["llm_config"] = _sanitize_llm_config(app.llm_config)
+    out["retrieval_config"] = _sanitize_retrieval_config(app.retrieval_config)
     return AppDetailOut(**out, kb_ids=kb_ids)
 
 
@@ -94,7 +130,7 @@ async def create_app(
         icon=body.icon,
         system_prompt=body.system_prompt,
         llm_config=_prepare_llm_config(body.llm_config),
-        retrieval_config=body.retrieval_config,
+        retrieval_config=_prepare_retrieval_config(body.retrieval_config),
         widget_config=body.widget_config,
     )
     session.add(app)
@@ -145,6 +181,32 @@ async def update_app(
             merged["api_key_enc"] = encrypt_secret(incoming["api_key"])
             merged["api_key_set"] = True
         data["llm_config"] = merged
+    if "retrieval_config" in data:
+        # 合并式更新：顶层键表单整体提交；rerank_config 保留旧密文除非显式给新 key
+        merged_rc = dict(app.retrieval_config or {})
+        incoming_rc = dict(data["retrieval_config"] or {})
+        for k, v in incoming_rc.items():
+            if k != "rerank_config":
+                merged_rc[k] = v
+        inc_rr = dict(incoming_rc.get("rerank_config") or {})
+        old_rr = dict(merged_rc.get("rerank_config") or {})
+        rr = {k: v for k, v in old_rr.items() if k.startswith("api_key")}
+        for k in ("api_base", "model"):
+            if k in inc_rr:
+                rr[k] = inc_rr[k]
+        if inc_rr.get("clear_api_key"):
+            rr.pop("api_key_enc", None)
+            rr.pop("api_key_set", None)
+            rr.pop("api_key_masked", None)
+        if inc_rr.get("api_key"):
+            from app.core.crypto import encrypt_secret
+
+            rr["api_key_enc"] = encrypt_secret(inc_rr["api_key"])
+        if rr:
+            merged_rc["rerank_config"] = rr
+        else:
+            merged_rc.pop("rerank_config", None)
+        data["retrieval_config"] = merged_rc
     for field, value in data.items():
         setattr(app, field, value)
     if kb_ids is not None:
