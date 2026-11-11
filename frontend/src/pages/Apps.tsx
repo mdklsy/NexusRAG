@@ -1,4 +1,5 @@
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -44,6 +45,8 @@ function ConfigForm({
   form: any;
   kbs: { id: string; name: string }[];
 }) {
+  const kgOn = Form.useWatch(["retrieval_config", "use_kg"], form);
+  const rerank = Form.useWatch(["retrieval_config", "rerank"], form);
   return (
     <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
       <Row gutter={12}>
@@ -103,17 +106,19 @@ function ConfigForm({
           </Form.Item>
         </Col>
       </Row>
-      <Typography.Title level={5}>
-        检索策略{" "}
-        <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
-          决定「怎么从知识库找资料、找多少、怎么排序」——悬停各项标题查看说明
-        </Typography.Text>
+      <Typography.Title level={5} style={{ marginBottom: 4 }}>
+        检索策略
       </Typography.Title>
-      <Row gutter={12}>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 0, fontSize: 12 }}>
+        控制「怎么从知识库找资料、找多少、怎么排序」
+      </Typography.Paragraph>
+      <Row gutter={16}>
         <Col span={6}>
           <Form.Item
             name={["retrieval_config", "top_k"]}
-            label={<Tooltip title="检索时返回的最相关片段数量，作为参考资料送给模型。越大信息越全，但更慢、且可能引入无关内容。">召回条数 Top K</Tooltip>}
+            label="召回条数 Top K"
+            tooltip="检索时返回的最相关片段数量，作为参考资料送给模型。越大信息越全，但更慢、且可能引入无关内容。"
+            extra={<span style={{ fontSize: 12 }}>送给模型的参考片段条数</span>}
           >
             <InputNumber min={1} max={20} style={{ width: "100%" }} />
           </Form.Item>
@@ -121,7 +126,9 @@ function ConfigForm({
         <Col span={6}>
           <Form.Item
             name={["retrieval_config", "score_threshold"]}
-            label={<Tooltip title="0~1：相关度低于该值的片段直接丢弃，宁缺毋滥。留空/0 = 不过滤。检索不到资料时助手会如实说「没找到」。">相似度阈值</Tooltip>}
+            label="相似度阈值"
+            tooltip="0~1：相关度低于该值的片段直接丢弃，宁缺毋滥。检索不到资料时助手会如实说「没找到」。"
+            extra={<span style={{ fontSize: 12 }}>低分丢弃；留空 = 不过滤</span>}
           >
             <InputNumber min={0} max={1} step={0.05} style={{ width: "100%" }} />
           </Form.Item>
@@ -129,7 +136,9 @@ function ConfigForm({
         <Col span={6}>
           <Form.Item
             name={["retrieval_config", "history_window"]}
-            label={<Tooltip title="多轮对话时携带最近几条历史消息（一轮=一问一答）给模型，让「它」「刚才说的」这类指代能被理解。0 = 每次都是全新提问。">历史轮数</Tooltip>}
+            label="历史轮数"
+            tooltip="多轮对话时携带最近几条历史消息（一轮=一问一答），让「它」「刚才说的」这类指代能被理解。"
+            extra={<span style={{ fontSize: 12 }}>多轮对话的上下文条数</span>}
           >
             <InputNumber min={0} max={20} style={{ width: "100%" }} />
           </Form.Item>
@@ -137,85 +146,142 @@ function ConfigForm({
         <Col span={6}>
           <Form.Item
             name={["retrieval_config", "intent_route"]}
-            label={<Tooltip title="开启后先由模型判断提问类型：「知识问答」走检索，「你好/谢谢」等闲聊直接回复——省 token、响应更快。">意图路由</Tooltip>}
+            label="意图路由"
+            tooltip="先由模型判断提问类型：「知识问答」走检索，「你好/谢谢」等闲聊直接回复。"
+            extra={<span style={{ fontSize: 12 }}>闲聊直答，省 token</span>}
             valuePropName="checked"
           >
             <Switch />
           </Form.Item>
         </Col>
-        <Col span={24}>
-          <Space size={16} style={{ marginBottom: 8 }} align="center">
-            <Form.Item name={["retrieval_config", "use_kg"]} valuePropName="checked" noStyle>
-              <Switch size="small" />
-            </Form.Item>
-            <Typography.Text>知识图谱增强</Typography.Text>
-            <Form.Item name={["retrieval_config", "kg_hops"]} noStyle>
-              <InputNumber min={1} max={3} size="small" />
-            </Form.Item>
-            <Tooltip title="从问题命中的实体出发，沿知识图谱的关系边扩展几层（1~3）。例如「Qdrant」1 跳就能到「向量数据库」。">
-              <Typography.Text style={{ cursor: "help" }}>跳数</Typography.Text>
-            </Tooltip>
-            <Form.Item name={["retrieval_config", "kg_top_entities"]} noStyle>
-              <InputNumber min={1} max={10} size="small" />
-            </Form.Item>
-            <Tooltip title="最多注入多少个图谱实体/关系事实到提示词，防止图谱内容挤占正文空间。">
-              <Typography.Text style={{ cursor: "help" }}>实体上限</Typography.Text>
-            </Tooltip>
-            <Typography.Text type="secondary">（从文档预抽取的实体关系图中补充关联事实，如{"「NexusRAG --使用--> Qdrant」"}）</Typography.Text>
-          </Space>
-        </Col>
-        <Col span={24}>
-          <Space size={16} align="center">
-            <Form.Item
-              name={["retrieval_config", "use_bm25"]}
-              valuePropName="checked"
-              noStyle
-            >
-              <Switch size="small" />
-            </Form.Item>
-            <Tooltip title="关键词倒排检索与语义向量并行召回、RRF 融合排序。型号、专有名词等精确词，BM25 比向量更准。">
-              <Typography.Text style={{ cursor: "help" }}>BM25 混合检索</Typography.Text>
-            </Tooltip>
-            <Form.Item
-              name={["retrieval_config", "rerank"]}
-              label="重排"
-              noStyle
-            >
-              <Select
-                size="small"
-                style={{ width: 190 }}
-                options={[
-                  { value: "none", label: "不重排" },
-                  { value: "llm", label: "LLM 重排（打分式）" },
-                  { value: "api", label: "托管 API 重排（推荐）" },
-                  { value: "cross_encoder", label: "本地 Cross-Encoder" },
-                ]}
-              />
-            </Form.Item>
-            <Typography.Text type="secondary">（融合召回后对候选二次精排；API 重排用 bge-reranker，快且便宜）</Typography.Text>
-          </Space>
-        </Col>
       </Row>
+      <Form.Item
+        name={["retrieval_config", "use_bm25"]}
+        label="BM25 混合检索"
+        tooltip="关键词倒排检索与语义向量并行召回、RRF 融合排序。型号、专有名词等精确词，BM25 比向量更准。"
+        extra={<span style={{ fontSize: 12 }}>关闭 = 只用语义向量检索</span>}
+        valuePropName="checked"
+      >
+        <Switch />
+      </Form.Item>
+      <Form.Item
+        name={["retrieval_config", "use_kg"]}
+        label="知识图谱增强"
+        tooltip="从文档预抽取的实体关系图中补充关联事实，如「NexusRAG --使用--> Qdrant」帮助回答跨实体问题。"
+        extra={<span style={{ fontSize: 12 }}>开启后可设置下方跳数与实体上限</span>}
+        valuePropName="checked"
+      >
+        <Switch />
+      </Form.Item>
+      {kgOn && (
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          <Col span={6}>
+            <Form.Item
+              name={["retrieval_config", "kg_hops"]}
+              label="图谱跳数"
+              tooltip="从问题命中的实体出发，沿关系边扩展几层（1~3）。例如「Qdrant」1 跳就能到「向量数据库」。"
+              extra={<span style={{ fontSize: 12 }}>关系扩展层数 1~3</span>}
+            >
+              <InputNumber min={1} max={3} style={{ width: "100%" }} />
+            </Form.Item>
+          </Col>
+          <Col span={6}>
+            <Form.Item
+              name={["retrieval_config", "kg_top_entities"]}
+              label="实体上限"
+              tooltip="最多注入多少条图谱事实到提示词，防止图谱内容挤占正文空间。"
+              extra={<span style={{ fontSize: 12 }}>注入的事实条数上限</span>}
+            >
+              <InputNumber min={1} max={10} style={{ width: "100%" }} />
+            </Form.Item>
+          </Col>
+        </Row>
+      )}
+      <Form.Item
+        name={["retrieval_config", "rerank"]}
+        label="重排"
+        tooltip="向量+BM25 融合召回后，对候选片段做相关性二次精排，把最相关的排到最前。"
+        extra={<span style={{ fontSize: 12 }}>推荐托管 API 重排：快、便宜、效果稳定</span>}
+      >
+        <Select
+          style={{ width: 280 }}
+          options={[
+            { value: "none", label: "不重排" },
+            { value: "api", label: "托管 API 重排（推荐）" },
+            { value: "llm", label: "LLM 重排（让对话模型打分）" },
+            { value: "cross_encoder", label: "本地 Cross-Encoder（需装依赖）" },
+          ]}
+        />
+      </Form.Item>
+      {rerank === "api" && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="托管重排使用全局配置，应用内无需填写"
+          description="在部署目录 .env 中配置 RERANK_API_BASE / RERANK_API_KEY / RERANK_MODEL（默认 BAAI/bge-reranker-v2-m3，硅基流动免费档）。"
+        />
+      )}
+      {rerank === "cross_encoder" && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="本地 Cross-Encoder 需要在 backend 安装可选依赖"
+          description="pip install '.[rerank]'（会拉起 sentence-transformers，较重）；轻量部署建议用托管 API 重排。"
+        />
+      )}
+      {rerank === "llm" && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="LLM 重排由当前对话模型给候选打分"
+          description="无需额外配置，但每轮多一次模型调用，速度稍慢。"
+        />
+      )}
 
-      <Typography.Title level={5}>网页挂件</Typography.Title>
-      <Row gutter={12}>
+      <Typography.Title level={5} style={{ marginBottom: 4 }}>
+        网页挂件
+      </Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 0, fontSize: 12 }}>
+        嵌入到外部网站的客服挂件（网页引入一行 widget.js 脚本），此处配置其外观
+      </Typography.Paragraph>
+      <Row gutter={16}>
         <Col span={8}>
-          <Form.Item name={["widget_config", "title"]} label="挂件标题" noStyle>
+          <Form.Item
+            name={["widget_config", "title"]}
+            label="挂件标题"
+            extra={<span style={{ fontSize: 12 }}>聊天窗口顶部标题</span>}
+          >
             <Input placeholder="智能客服" />
           </Form.Item>
         </Col>
         <Col span={8}>
-          <Form.Item name={["widget_config", "theme"]} label="主题色" noStyle>
+          <Form.Item
+            name={["widget_config", "theme"]}
+            label="主题色"
+            tooltip="挂件按钮与气泡的主色调"
+            extra={<span style={{ fontSize: 12 }}>#hex，如 #1677ff</span>}
+          >
             <Input placeholder="#1677ff" />
           </Form.Item>
         </Col>
-        <Col span={4}>
-          <Form.Item name={["widget_config", "bubble"]} label="按钮图标" noStyle>
+        <Col span={8}>
+          <Form.Item
+            name={["widget_config", "bubble"]}
+            label="按钮图标"
+            extra={<span style={{ fontSize: 12 }}>悬浮球 emoji</span>}
+          >
             <Input placeholder="💬" />
           </Form.Item>
         </Col>
         <Col span={24}>
-          <Form.Item name={["widget_config", "welcome"]} label="欢迎语" noStyle>
+          <Form.Item
+            name={["widget_config", "welcome"]}
+            label="欢迎语"
+            extra={<span style={{ fontSize: 12 }}>用户打开挂件时先展示的一句话</span>}
+          >
             <Input placeholder="你好，请问有什么可以帮你？" />
           </Form.Item>
         </Col>
@@ -470,9 +536,11 @@ export default function Apps() {
   const openEdit = async (app: AppRow) => {
     const detail = await api.get<AppRow>(`/api/v1/apps/${app.id}`);
     setEditing(detail);
+    // 旧数据可能缺某个检索参数：与默认值合并，避免表单显示空、保存时丢字段
+    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", ...(detail.retrieval_config || {}) };
     form.setFieldsValue({
       ...detail,
-      ...detail.llm_config ? { } : {},
+      retrieval_config: rc,
     });
     form.setFieldValue(["llm_config", "model"], detail.llm_config?.model || "");
     form.setFieldValue(["llm_config", "temperature"], detail.llm_config?.temperature ?? 0.3);
