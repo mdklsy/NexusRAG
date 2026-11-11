@@ -50,6 +50,10 @@ class FakeLLMClient:
             return '{"intent": "qa"}'
         if "质量评审员" in last:
             return '{"faithfulness": 5, "relevance": 4}'
+        if "查询改写助手" in last:
+            return '{"query": "改写后的独立查询"}'
+        if "压缩为一段简洁的摘要" in last:
+            return '{"summary": "用户此前询问了NexusRAG的检索架构与重排配置"}'
         if "知识图谱信息抽取" in last:
             return (
                 '{"triples": ['

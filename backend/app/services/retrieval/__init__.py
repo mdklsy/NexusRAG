@@ -96,18 +96,18 @@ async def retrieve(
         rows = (
             (
                 await session.execute(
-                    select(Chunk, Document.name)
+                    select(Chunk, Document.name, Document.updated_at)
                     .join(Document, Chunk.document_id == Document.id)
                     .where(Chunk.id.in_(fused))
                 )
             )
             .all()
         )
-        row_map = {chunk.id: (chunk, doc_name) for chunk, doc_name in rows}
+        row_map = {chunk.id: (chunk, doc_name, doc_updated) for chunk, doc_name, doc_updated in rows}
         for cid in fused:
             if cid not in row_map:
                 continue
-            chunk, doc_name = row_map[cid]
+            chunk, doc_name, doc_updated = row_map[cid]
             result.chunks.append(
                 RetrievedChunk(
                     chunk_id=chunk.id,
@@ -117,6 +117,7 @@ async def retrieve(
                     score=score_map.get(chunk.id, 0.0),
                     seq=chunk.seq,
                     heading=chunk.meta.get("heading", ""),
+                    updated_at=doc_updated.strftime("%Y-%m-%d") if doc_updated else "",
                 )
             )
 

@@ -107,7 +107,7 @@ function ConfigForm({
   const bubbleVal = Form.useWatch(["widget_config", "bubble"], form) as string | undefined;
   const rerankCfg = Form.useWatch(["retrieval_config", "rerank_config"], form) as any;
   return (
-    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
+    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
       <Tabs
         items={[
           { key: "basic", label: "基本信息", forceRender: true, children: (
@@ -681,7 +681,7 @@ export default function Apps() {
     const detail = await api.get<AppRow>(`/api/v1/apps/${app.id}`);
     setEditing(detail);
     // 旧数据可能缺某个检索参数：与默认值合并，避免表单显示空、保存时丢字段
-    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", ...(detail.retrieval_config || {}) };
+    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, intent_route: true, use_bm25: true, rerank: "none", ...(detail.retrieval_config || {}) };
     form.setFieldsValue({
       ...detail,
       retrieval_config: rc,

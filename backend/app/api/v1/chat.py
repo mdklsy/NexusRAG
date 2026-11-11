@@ -64,7 +64,7 @@ async def chat_stream(
         conversation_id = conv.id
 
     # 历史窗口
-    window = int((app.retrieval_config or {}).get("history_window", 6))
+    window = int((app.retrieval_config or {}).get("history_window", 12))
     rows = (
         (
             await session.execute(

@@ -5,6 +5,22 @@ from dataclasses import dataclass, field
 
 from app.services.kg.graph_store import GraphEntity, SubGraph
 
+# chunk 正文进入 Prompt 前的结构卫生：文档内容是用户可上传的，
+# 若与 Prompt 自身的分隔符/标记撞形（如正文含 --- 或 【参考资料】），
+# 轻则混淆结构，重则被当成指令层内容（Prompt 注入面）。
+_MARKER_ESCAPES = {
+    "---": "___",
+    "【参考资料】": "〖参考资料〗",
+    "【知识图谱事实】": "〖知识图谱事实〗",
+    "# 用户问题": "＃用户问题",
+}
+
+
+def _sanitize_chunk_text(text: str) -> str:
+    for k, v in _MARKER_ESCAPES.items():
+        text = text.replace(k, v)
+    return text
+
 
 @dataclass
 class RetrievedChunk:
@@ -15,6 +31,7 @@ class RetrievedChunk:
     score: float
     seq: int = 0
     heading: str = ""
+    updated_at: str = ""  # 文档更新时间（YYYY-MM-DD），供时效性判断与展示
 
 
 @dataclass
@@ -34,11 +51,13 @@ class RetrievalResult:
         citations: list[dict] = []
         used = 0
         for i, c in enumerate(self.chunks[:max_chunks], start=1):
-            body = c.content[:1200]
+            body = _sanitize_chunk_text(c.content[:1200])
             if used + len(body) > max_chars:
                 break
             used += len(body)
             head = f"[{i}] ({c.document_name}"
+            if c.updated_at:
+                head += f" · 更新 {c.updated_at}"
             if c.heading:
                 head += f" · {c.heading}"
             head += ")"
@@ -50,6 +69,7 @@ class RetrievalResult:
                     "document_id": str(c.document_id),
                     "document_name": c.document_name,
                     "heading": c.heading,
+                    "updated_at": c.updated_at,
                     "score": round(c.score, 4),
                     "snippet": c.content[:200],
                 }

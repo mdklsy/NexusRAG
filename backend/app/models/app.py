@@ -28,7 +28,7 @@ DEFAULT_RETRIEVAL_CONFIG = {
     "use_kg": True,
     "kg_hops": 1,
     "kg_top_entities": 3,
-    "history_window": 6,
+    "history_window": 12,
     "intent_route": True,
     "use_bm25": True,   # 混合检索：向量 + BM25，RRF 融合
     "rerank": "none",   # none | llm | cross_encoder
