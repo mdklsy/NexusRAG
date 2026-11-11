@@ -32,13 +32,13 @@ NexusRAG 帮你把一堆文档，变成一个**可被检索、可溯源、可量
 
 ## 核心特性
 
-- 🚀 **开箱即用**：docker compose 一键拉起全栈（API / Worker / PostgreSQL / Qdrant / Redis）
-- 🧠 **双引擎检索**：向量 RAG + 轻量知识图谱（GraphRAG-lite），实体类问题显著增强
-- 🔗 **引用溯源**：每条回答标注来源文档与原文片段，拒绝黑盒
-- 🛠 **模型无关**：OpenAI 兼容协议一套配置适配 DeepSeek / 智谱 GLM / 通义 / OpenAI / Ollama 本地模型
-- 📊 **数据看板**：调用量、Token 消耗、延迟分位、命中率、无答案率一目了然
-- 🔐 **多应用隔离**：每个应用独立的知识库绑定与参数配置，API Key 认证
-- 📖 **Apache 2.0**：可自由二次开发与商用
+- **开箱即用**：docker compose 一键拉起全栈（API / Worker / PostgreSQL / Qdrant / Redis）
+- **双引擎检索**：向量 RAG + 轻量知识图谱（GraphRAG-lite），实体类问题显著增强
+- **引用溯源**：每条回答标注来源文档与原文片段，拒绝黑盒
+- **模型无关**：OpenAI 兼容协议一套配置适配 DeepSeek / 智谱 GLM / 通义 / OpenAI / Ollama 本地模型
+- **数据看板**：调用量、Token 消耗、延迟分位、命中率、无答案率一目了然
+- **多应用隔离**：每个应用独立的知识库绑定与参数配置，API Key 认证
+- **Apache 2.0**：可自由二次开发与商用
 
 ## 快速开始
 
@@ -56,7 +56,7 @@ open http://localhost:3001 # 控制台（默认账号见 .env 中 ADMIN_EMAIL/AD
 > `http://host.docker.internal:9999/v1` 即可先跑通全链路再接真模型。
 
 <details>
-<summary>🇨🇳 国内网络部署指引（镜像拉取 / 依赖安装慢看这里）</summary>
+<summary>国内网络部署指引（镜像拉取 / 依赖安装慢看这里）</summary>
 
 1. **基础镜像预拉**：BuildKit 构建时拉基础镜像常走 `auth.docker.io`（易受 DNS 污染影响）。
    推荐先用 daemon 直接预拉（daemon 走 `registry-mirrors`，成功率高），构建即命中本地缓存：
@@ -128,7 +128,7 @@ curl -N http://localhost:8000/api/v1/chat/stream \
 <script src="http://your-host/widget.js" data-key="nx-挂件Key" defer></script>
 ```
 
-右下角出现 💬 气泡，点击即聊——流式回答、引用溯源、工具调用状态全都有，Shadow DOM 隔离样式，不依赖任何框架。
+右下角出现对话气泡，点击即聊——流式回答、引用溯源、工具调用状态全都有，Shadow DOM 隔离样式，不依赖任何框架。
 
 ### 让助手能查你的业务系统
 
@@ -148,23 +148,6 @@ curl -N http://localhost:8000/api/v1/chat/stream \
 ```
 
 详见 [docs/architecture.md](docs/architecture.md) 与 [docs/roadmap.md](docs/roadmap.md)。
-
-## 真实集成案例
-
-- [极速图片工坊（微信小程序）](docs/integration-miniprogram.md) — 小程序 SDK 接入全流程
-- [（Web 管理台）](docs/integration-web.md) — 业务 API 注册为工具，LLM 自动查询业务数据（function calling）
-
-## 路线图
-
-- [x] 一期：核心 RAG + 轻量 KG + 控制台 + 数据看板 + 开放 API
-- [x] 二期：网页聊天挂件（一行 script）、业务系统连接器（HTTP API + 只读 SQL + function calling）、挂件专用 Key（scope=chat）
-- [x] 二期续：混合检索（BM25 倒排 + 向量 RRF 融合，jieba 分词）、重排（LLM 零依赖 / Cross-Encoder 可选依赖）、微信小程序 SDK
-- [x] 三期已落地：应用级 LLM 凭证（AES 加密，每应用可独立厂商/账号）、用户角色权限（admin/editor/viewer）、Ragas 风格评测（忠实度/相关性/命中率）、微信公众号接入
-- [ ] 后续：公众号安全模式加密、可视化工作流编排、Neo4j 图引擎、GraphRAG 深度模式（明确不做多租户）
-
-## 参与贡献
-
-欢迎 Issue / PR。开发环境见上方「本机开发」，提交前请跑 `ruff check` 与 `pytest`。
 
 ## License
 
