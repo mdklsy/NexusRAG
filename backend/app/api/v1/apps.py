@@ -32,18 +32,25 @@ async def _set_kb_bindings(session: AsyncSession, app_id: uuid.UUID, kb_ids: lis
         session.add(AppKnowledgeBase(app_id=app_id, kb_id=kb_id))
 
 
-@router.get("", response_model=list[AppOut])
+@router.get("", response_model=list[AppDetailOut])
 async def list_apps(
     _: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ):
     apps = (
         (await session.execute(select(App).order_by(App.created_at.desc()))).scalars().all()
     )
+    # 列表带 kb_ids：前端「知识库」列直接展示绑定（此前列表无该字段恒显示未绑定）
+    bindings = (
+        await session.execute(select(AppKnowledgeBase.app_id, AppKnowledgeBase.kb_id))
+    ).all()
+    kb_map: dict = {}
+    for app_id, kb_id in bindings:
+        kb_map.setdefault(app_id, []).append(kb_id)
     out = []
     for a in apps:
         data = AppOut.model_validate(a).model_dump()
         data["llm_config"] = _sanitize_llm_config(a.llm_config)
-        out.append(AppOut.model_validate(data))
+        out.append(AppDetailOut(**data, kb_ids=kb_map.get(a.id, [])))
     return out
 
 
