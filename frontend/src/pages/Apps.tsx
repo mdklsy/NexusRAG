@@ -2,7 +2,6 @@ import {
   Button,
   Card,
   Col,
-  Drawer,
   Empty,
   Form,
   Input,
@@ -46,14 +45,9 @@ function ConfigForm({
   kbs: { id: string; name: string }[];
 }) {
   return (
-    <Form form={form} layout="vertical" initialValues={{ icon: "🤖", temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
+    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
       <Row gutter={12}>
-        <Col span={2}>
-          <Form.Item name="icon" label="图标">
-            <Select options={ICONS.map((i) => ({ value: i, label: i }))} />
-          </Form.Item>
-        </Col>
-        <Col span={10}>
+        <Col span={12}>
           <Form.Item name="name" label="应用名称" rules={[{ required: true }]}>
             <Input placeholder="如：智能客服" />
           </Form.Item>
@@ -109,47 +103,79 @@ function ConfigForm({
           </Form.Item>
         </Col>
       </Row>
-      <Typography.Title level={5}>检索策略</Typography.Title>
+      <Typography.Title level={5}>
+        检索策略{" "}
+        <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+          决定「怎么从知识库找资料、找多少、怎么排序」——悬停各项标题查看说明
+        </Typography.Text>
+      </Typography.Title>
       <Row gutter={12}>
         <Col span={6}>
-          <Form.Item name={["retrieval_config", "top_k"]} label="Top K">
+          <Form.Item
+            name={["retrieval_config", "top_k"]}
+            label={<Tooltip title="检索时返回的最相关片段数量，作为参考资料送给模型。越大信息越全，但更慢、且可能引入无关内容。">召回条数 Top K</Tooltip>}
+          >
             <InputNumber min={1} max={20} style={{ width: "100%" }} />
           </Form.Item>
         </Col>
         <Col span={6}>
-          <Form.Item name={["retrieval_config", "score_threshold"]} label="相似度阈值">
+          <Form.Item
+            name={["retrieval_config", "score_threshold"]}
+            label={<Tooltip title="0~1：相关度低于该值的片段直接丢弃，宁缺毋滥。留空/0 = 不过滤。检索不到资料时助手会如实说「没找到」。">相似度阈值</Tooltip>}
+          >
             <InputNumber min={0} max={1} step={0.05} style={{ width: "100%" }} />
           </Form.Item>
         </Col>
         <Col span={6}>
-          <Form.Item name={["retrieval_config", "history_window"]} label="历史轮数">
+          <Form.Item
+            name={["retrieval_config", "history_window"]}
+            label={<Tooltip title="多轮对话时携带最近几条历史消息（一轮=一问一答）给模型，让「它」「刚才说的」这类指代能被理解。0 = 每次都是全新提问。">历史轮数</Tooltip>}
+          >
             <InputNumber min={0} max={20} style={{ width: "100%" }} />
           </Form.Item>
         </Col>
         <Col span={6}>
-          <Form.Item name={["retrieval_config", "intent_route"]} label="意图路由" valuePropName="checked">
+          <Form.Item
+            name={["retrieval_config", "intent_route"]}
+            label={<Tooltip title="开启后先由模型判断提问类型：「知识问答」走检索，「你好/谢谢」等闲聊直接回复——省 token、响应更快。">意图路由</Tooltip>}
+            valuePropName="checked"
+          >
             <Switch />
           </Form.Item>
         </Col>
         <Col span={24}>
-          <Space size={16} style={{ marginBottom: 8 }}>
-            <Form.Item name={["retrieval_config", "use_kg"]} label="知识图谱增强" valuePropName="checked" noStyle>
+          <Space size={16} style={{ marginBottom: 8 }} align="center">
+            <Form.Item name={["retrieval_config", "use_kg"]} valuePropName="checked" noStyle>
               <Switch size="small" />
             </Form.Item>
-            <Form.Item name={["retrieval_config", "kg_hops"]} label="子图跳数" noStyle>
+            <Typography.Text>知识图谱增强</Typography.Text>
+            <Form.Item name={["retrieval_config", "kg_hops"]} noStyle>
               <InputNumber min={1} max={3} size="small" />
             </Form.Item>
-            <Form.Item name={["retrieval_config", "kg_top_entities"]} label="实体数" noStyle>
+            <Tooltip title="从问题命中的实体出发，沿知识图谱的关系边扩展几层（1~3）。例如「Qdrant」1 跳就能到「向量数据库」。">
+              <Typography.Text style={{ cursor: "help" }}>跳数</Typography.Text>
+            </Tooltip>
+            <Form.Item name={["retrieval_config", "kg_top_entities"]} noStyle>
               <InputNumber min={1} max={10} size="small" />
             </Form.Item>
-            <Typography.Text type="secondary">（图谱增强：实体链接 → 子图召回 → 事实注入）</Typography.Text>
+            <Tooltip title="最多注入多少个图谱实体/关系事实到提示词，防止图谱内容挤占正文空间。">
+              <Typography.Text style={{ cursor: "help" }}>实体上限</Typography.Text>
+            </Tooltip>
+            <Typography.Text type="secondary">（从文档预抽取的实体关系图中补充关联事实，如{"「NexusRAG --使用--> Qdrant」"}）</Typography.Text>
           </Space>
         </Col>
         <Col span={24}>
-          <Space size={16}>
-            <Form.Item name={["retrieval_config", "use_bm25"]} label="BM25 混合检索" valuePropName="checked" noStyle>
+          <Space size={16} align="center">
+            <Form.Item
+              name={["retrieval_config", "use_bm25"]}
+              valuePropName="checked"
+              noStyle
+            >
               <Switch size="small" />
             </Form.Item>
+            <Tooltip title="关键词倒排检索与语义向量并行召回、RRF 融合排序。型号、专有名词等精确词，BM25 比向量更准。">
+              <Typography.Text style={{ cursor: "help" }}>BM25 混合检索</Typography.Text>
+            </Tooltip>
             <Form.Item
               name={["retrieval_config", "rerank"]}
               label="重排"
@@ -157,15 +183,16 @@ function ConfigForm({
             >
               <Select
                 size="small"
-                style={{ width: 150 }}
+                style={{ width: 190 }}
                 options={[
                   { value: "none", label: "不重排" },
-                  { value: "llm", label: "LLM 重排" },
-                  { value: "cross_encoder", label: "Cross-Encoder（需装依赖）" },
+                  { value: "llm", label: "LLM 重排（打分式）" },
+                  { value: "api", label: "托管 API 重排（推荐）" },
+                  { value: "cross_encoder", label: "本地 Cross-Encoder" },
                 ]}
               />
             </Form.Item>
-            <Typography.Text type="secondary">（向量+BM25 RRF 融合；重排对候选二次精排）</Typography.Text>
+            <Typography.Text type="secondary">（融合召回后对候选二次精排；API 重排用 bge-reranker，快且便宜）</Typography.Text>
           </Space>
         </Col>
       </Row>
@@ -528,16 +555,26 @@ export default function Apps() {
         ]}
       />
 
-      <Drawer
+      <Modal
         title={editing ? `配置 - ${editing.name}` : "创建应用"}
         open={creating || !!editing}
-        width={680}
-        onClose={() => {
+        width={780}
+        onCancel={() => {
           setEditing(null);
           setCreating(false);
         }}
-        extra={
+        footer={[
           <Button
+            key="cancel"
+            onClick={() => {
+              setEditing(null);
+              setCreating(false);
+            }}
+          >
+            取消
+          </Button>,
+          <Button
+            key="save"
             type="primary"
             onClick={async () => {
               const values = await form.validateFields();
@@ -546,8 +583,8 @@ export default function Apps() {
             loading={save.isPending}
           >
             保存
-          </Button>
-        }
+          </Button>,
+        ]}
       >
         <ConfigForm form={form} kbs={kbs || []} />
         {editing && (
@@ -555,7 +592,7 @@ export default function Apps() {
             <ToolsSection appId={editing.id} />
           </div>
         )}
-      </Drawer>
+      </Modal>
 
       <Modal
         title={`API Keys - ${keyApp?.name || ""}`}
