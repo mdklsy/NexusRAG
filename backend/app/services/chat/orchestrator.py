@@ -178,12 +178,15 @@ async def _classify_intent(llm, question: str) -> str:
 
 
 async def _run_with_tools(
-    llm, messages: list[dict], tools, temperature: float, max_tokens: int
+    llm, messages: list[dict], tools, temperature: float, max_tokens: int,
+    ctx: dict | None = None,
 ) -> AsyncGenerator[dict]:
     """function calling 循环（非流式多轮）。
 
     产出事件：tool_call / tool_result / delta（最终答案整段）/ usage。
     工具执行失败不中断，错误文本回喂 LLM 令其向用户说明。
+    ctx 是业务参数上下文（end_user/metadata），仅服务端注入工具请求，
+    不进 Prompt——LLM 决定调用与参数，身份鉴权由业务 API 依据注入凭据完成。
     """
     openai_tools = to_openai_tools(tools)
     tool_map = {slugify(t.name): t for t in tools}
@@ -231,7 +234,7 @@ async def _run_with_tools(
             try:
                 if tool is None:
                     raise ToolError(f"未知工具 {tc['name']}")
-                result = execute_tool(tool, args)
+                result = execute_tool(tool, args, ctx)
                 ok = True
             except ToolError as e:
                 result, ok = f"工具执行失败: {e}", False
@@ -254,6 +257,8 @@ async def run_chat(
     conversation_id: uuid.UUID,
     question: str,
     history: list[dict],
+    end_user: dict | None = None,
+    metadata: dict | None = None,
 ) -> AsyncGenerator[dict]:
     from app.core import runtime_settings
 
@@ -301,10 +306,11 @@ async def run_chat(
     answer_parts: list[str] = []
     usage: dict = {}
     tools = await get_app_tools(session, app.id)
+    tool_ctx = {"end_user": end_user or {}, "metadata": metadata or {}}
 
     if tools:
         async for event in _run_with_tools(
-            llm, messages, tools, temperature, max_tokens
+            llm, messages, tools, temperature, max_tokens, ctx=tool_ctx
         ):
             if event["type"] == "delta":
                 answer_parts.append(event["content"])

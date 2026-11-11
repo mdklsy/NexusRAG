@@ -5,6 +5,7 @@
 
 import json
 import re
+from typing import Any
 
 import httpx
 from sqlalchemy import create_engine, text
@@ -97,7 +98,32 @@ def _safe_sql(sql: str) -> str:
     return cleaned
 
 
-def execute_http_tool(tool: Tool, args: dict) -> str:
+def _render_business_templates(value: str, ctx: dict) -> str:
+    """渲染业务参数模板：{{meta.xxx}} / {{end_user.id}} / {{end_user.name}}。
+
+    只在服务端执行（注入 header/URL/query），LLM 看不到 metadata、也无法伪造
+    ——身份鉴权始终由业务 API 依据注入的凭据做行级隔离。
+    """
+
+    def sub(m: "re.Match[str]") -> str:
+        expr = m.group(1).strip()
+        parts = expr.split(".")
+        if parts and parts[0] == "meta":
+            parts[0] = "metadata"  # 模板简写 {{meta.x}} == ctx["metadata"]["x"]
+        node: Any = ctx
+        for p in parts:
+            if isinstance(node, dict) and p in node:
+                node = node[p]
+            else:
+                raise ToolError(f"缺少业务参数 {expr}（本对话未携带 end_user/metadata）")
+            if node is None:
+                raise ToolError(f"业务参数 {expr} 为空")
+        return str(node)
+
+    return re.sub(r"\{\{\s*([^}]+?)\s*\}\}", sub, value)
+
+
+def execute_http_tool(tool: Tool, args: dict, ctx: dict | None = None) -> str:
     cfg = tool.config or {}
     method = (cfg.get("method") or "GET").upper()
     url = str(cfg.get("url") or "")
@@ -109,6 +135,9 @@ def execute_http_tool(tool: Tool, args: dict) -> str:
         url = url.replace("{" + str(key) + "}", str(value))
 
     headers = dict(cfg.get("headers") or {})
+    if ctx:
+        url = _render_business_templates(url, ctx)
+        headers = {k: _render_business_templates(str(v), ctx) for k, v in headers.items()}
     payload = args.get("body")
     if payload is not None:
         headers.setdefault("Content-Type", "application/json")
@@ -166,10 +195,14 @@ def execute_sql_tool(tool: Tool, args: dict) -> str:
     return _truncate(json.dumps(rows, ensure_ascii=False, default=default))
 
 
-def execute_tool(tool: Tool, args: dict) -> str:
-    """统一入口：返回结果文本；ToolError 的 message 也会回给 LLM。"""
+def execute_tool(tool: Tool, args: dict, ctx: dict | None = None) -> str:
+    """统一入口：返回结果文本；ToolError 的 message 也会回给 LLM。
+
+    ctx = {"end_user": {...}, "metadata": {...}}，仅 http_api 渲染业务模板；
+    sql_db 不做模板渲染（防拼串注入），身份隔离靠只读账号与库表权限。
+    """
     if tool.type == "http_api":
-        return execute_http_tool(tool, args)
+        return execute_http_tool(tool, args, ctx)
     if tool.type == "sql_db":
         return execute_sql_tool(tool, args)
     raise ToolError(f"未知工具类型: {tool.type}")

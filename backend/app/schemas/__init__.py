@@ -295,11 +295,24 @@ class ChatMessageIn(BaseModel):
     content: str
 
 
+class EndUserIn(BaseModel):
+    """终端用户身份；页面后端签发的 HMAC 票据随请求携带（验签见 chat.py）。
+
+    id 用于会话归属与工具模板 {{end_user.id}}；token 等敏感凭据放 metadata，
+    只在服务端注入工具请求，不进 Prompt。
+    """
+
+    id: str = Field(min_length=1, max_length=128)
+    name: str = Field(default="", max_length=200)
+
+
 class ChatIn(BaseModel):
     app_id: uuid.UUID | None = None  # JWT 认证时必填；API Key 认证时忽略
     conversation_id: uuid.UUID | None = None
     messages: list[ChatMessageIn] = []
     query: str = ""  # 兼容：messages 为空时用 query
+    end_user: EndUserIn | None = None  # 终端用户身份（历史会话归属 + 工具模板）
+    metadata: dict = Field(default_factory=dict)  # 业务参数（token/order_id 等），仅服务端可见
 
     @property
     def question(self) -> str:
@@ -313,6 +326,15 @@ class ConversationOut(ORMModel):
     app_id: uuid.UUID
     title: str
     created_at: datetime
+
+
+class WidgetConversationOut(BaseModel):
+    """挂件历史会话列表项（按 end_user 隔离）。"""
+
+    id: uuid.UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class MessageOut(ORMModel):

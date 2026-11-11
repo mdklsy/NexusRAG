@@ -32,6 +32,13 @@
     title: "智能助手",
     welcome: "你好，请问有什么可以帮你？",
     bubble: "icon:comment",
+    // 终端用户身份：data-user-id/-name/-sig/-ts 由页面后端签发（HMAC 票据），
+    // 用于历史会话归属与工具的业务参数注入（见 docs 终端用户接入）
+    userId: scriptEl ? scriptEl.getAttribute("data-user-id") || "" : "",
+    userName: scriptEl ? scriptEl.getAttribute("data-user-name") || "" : "",
+    sig: scriptEl ? scriptEl.getAttribute("data-sig") || "" : "",
+    ts: scriptEl ? Number(scriptEl.getAttribute("data-ts")) || 0 : 0,
+    metadata: null, // 业务参数（token/order_id 等），仅服务端可见，不进 Prompt
   };
 
   // 悬浮球图标：icon:<key> 用内置 SVG 图标库；img:<dataURL> 用用户上传图片；
@@ -94,6 +101,10 @@
       body: JSON.stringify({
         conversation_id: state.conversationId,
         query: question,
+        end_user: state.cfg.userId
+          ? { id: state.cfg.userId, name: state.cfg.userName || "" }
+          : undefined,
+        metadata: state.cfg.metadata || undefined,
       }),
     })
       .then(function (resp) {
@@ -188,6 +199,13 @@
       theme +
       ";color:#fff;border:none;border-radius:8px;width:40px;font-size:16px;cursor:pointer}" +
       ".ft button:disabled{opacity:.5}" +
+      ".hist-btn{cursor:pointer;font-size:12px;opacity:.92;padding:3px 9px;border:1px solid rgba(255,255,255,.55);border-radius:6px;white-space:nowrap}" +
+      ".hist-item{background:#fff;border:1px solid #eceef2;border-radius:8px;padding:9px 12px;margin-bottom:8px;cursor:pointer}" +
+      ".hist-item:hover{border-color:#c9d7ff;background:#f6f9ff}" +
+      ".hist-title{font-size:13px;color:#333;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}" +
+      ".hist-time{font-size:11px;color:#999;margin-top:2px}" +
+      ".hist-back{font-size:13px;color:#1c6eff;cursor:pointer;margin-bottom:10px}" +
+      ".hist-empty{color:#999;font-size:13px;text-align:center;padding:30px 0}" +
       "@media (max-width:480px){.panel{right:8px;left:8px;width:auto;bottom:84px}}"
     );
   }
@@ -272,6 +290,11 @@
     var hdTitle = el("div", "t", state.cfg.title);
     var closeBtn = el("div", "x", "✕");
     hd.appendChild(hdTitle);
+    if (state.cfg.userId) {
+      var histBtn = el("div", "hist-btn", "历史");
+      histBtn.addEventListener("click", openHistory);
+      hd.appendChild(histBtn);
+    }
     hd.appendChild(closeBtn);
 
     var body = el("div", "bd");
@@ -323,6 +346,102 @@
     ui.body.appendChild(wrap);
     scrollBottom();
     return wrap;
+  }
+
+  // ---------- 终端用户：历史会话 ----------
+  // 身份来自页面后端签发的 HMAC 票据（data-* 或 window.NexusChatConfig）；
+  // 服务端验签后按 end_user_id 隔离返回，挂件拿不到别人的会话。
+
+  function authQuery() {
+    return (
+      "end_user_id=" + encodeURIComponent(state.cfg.userId || "") +
+      "&ts=" + (state.cfg.ts || 0) +
+      "&sig=" + encodeURIComponent(state.cfg.sig || "")
+    );
+  }
+
+  function authHeaders() {
+    return { Authorization: "Bearer " + state.cfg.apiKey };
+  }
+
+  function apiError(r) {
+    return r.json().then(function (e) {
+      throw new Error((e && e.detail) || "HTTP " + r.status);
+    });
+  }
+
+  function renderCites(bubbleEl, citations) {
+    var c = el("div", "cites", "来源：");
+    var seenCite = {};
+    citations.forEach(function (ct) {
+      var head = ct.heading ? " · " + String(ct.heading).slice(0, 24) : "";
+      var label = "[" + ct.index + "] " + ct.document_name + head;
+      if (seenCite[label]) return;
+      seenCite[label] = 1;
+      c.appendChild(el("span", null, label));
+    });
+    bubbleEl.appendChild(c);
+  }
+
+  function openHistory() {
+    if (state.busy) return;
+    var base = state.cfg.baseUrl.replace(/\/$/, "");
+    fetch(base + "/api/v1/chat/conversations?" + authQuery(), { headers: authHeaders() })
+      .then(function (r) {
+        if (!r.ok) return apiError(r);
+        return r.json();
+      })
+      .then(function (list) {
+        ui.body.innerHTML = "";
+        var back = el("div", "hist-back", "‹ 返回当前对话");
+        back.addEventListener("click", function () {
+          ui.body.innerHTML = "";
+          appendBot(state.cfg.welcome);
+        });
+        ui.body.appendChild(back);
+        if (!list.length) ui.body.appendChild(el("div", "hist-empty", "该身份下还没有历史会话"));
+        list.forEach(function (c) {
+          var item = el("div", "hist-item");
+          item.appendChild(el("div", "hist-title", c.title || "未命名对话"));
+          item.appendChild(el("div", "hist-time", String(c.updated_at || "").replace("T", " ").slice(0, 16)));
+          item.addEventListener("click", function () { loadConversation(c.id); });
+          ui.body.appendChild(item);
+        });
+        ui.body.scrollTop = 0;
+      })
+      .catch(function (e) {
+        appendBot("⚠️ 历史会话加载失败: " + (e && e.message ? e.message : e));
+      });
+  }
+
+  function loadConversation(id) {
+    var base = state.cfg.baseUrl.replace(/\/$/, "");
+    fetch(base + "/api/v1/chat/conversations/" + id + "/messages?" + authQuery(), {
+      headers: authHeaders(),
+    })
+      .then(function (r) {
+        if (!r.ok) return apiError(r);
+        return r.json();
+      })
+      .then(function (msgs) {
+        ui.body.innerHTML = "";
+        state.conversationId = id;
+        try { sessionStorage.setItem("nx_chat_" + id, id); } catch (e) {}
+        msgs.forEach(function (m) {
+          if (m.role === "user") { appendUser(m.content); return; }
+          if (m.role !== "assistant") return;
+          var b = appendBot("");
+          var txt = el("span", "txt");
+          b.appendChild(txt);
+          txt.innerHTML = renderMarkdown(m.content);
+          if (m.citations && m.citations.length) renderCites(b, m.citations);
+        });
+        if (!msgs.length) appendBot("（该会话没有消息记录）");
+        scrollBottom();
+      })
+      .catch(function (e) {
+        appendBot("⚠️ 历史记录加载失败: " + (e && e.message ? e.message : e));
+      });
   }
 
   function showTyping() {
@@ -417,6 +536,13 @@
     state.cfg = {};
     for (var k in DEFAULTS) state.cfg[k] = DEFAULTS[k];
     if (opts) for (var k2 in opts) state.cfg[k2] = opts[k2];
+    // 页面全局配置可覆盖 data-*（适合页面动态拿到票据后注入再初始化）：
+    // window.NexusChatConfig = { userId, userName, sig, ts, metadata }
+    var g = window.NexusChatConfig || {};
+    ["userId", "userName", "sig", "ts", "metadata"].forEach(function (k3) {
+      if (g[k3] !== undefined && g[k3] !== null && g[k3] !== "") state.cfg[k3] = g[k3];
+    });
+    if (!state.cfg.metadata && window.NexusChatMetadata) state.cfg.metadata = window.NexusChatMetadata;
     if (!state.cfg.apiKey) {
       console.error("[NexusChat] 缺少 apiKey");
       return;

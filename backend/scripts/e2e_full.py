@@ -580,7 +580,7 @@ def section_I(admin_token: str, app_id: str):
 def section_J(admin_token: str, kb_id2: str):
     print("\n== J. 基础设施 ==")
     ver = psql("SELECT version_num FROM alembic_version")
-    check("J", "J01", "迁移版本 0006", ver == "0006", f"version={ver}")
+    check("J", "J01", "迁移版本 0007", ver == "0007", f"version={ver}")
     n_tables = int(psql("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'") or 0)
     check("J", "J02", "表数量≥21", n_tables >= 21, f"n={n_tables}")
 

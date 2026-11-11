@@ -88,7 +88,7 @@ async def test_tool_calling_loop(sqlite_env, monkeypatch):
 
     fake_llm = FakeToolLLM()
 
-    def fake_execute(tool, args):
+    def fake_execute(tool, args, ctx=None):
         assert args == {"path_params": {"order_id": "A100"}}
         return '{"order_id": "A100", "status": "shipped"}'
 
@@ -156,7 +156,7 @@ async def test_tool_failure_feeds_error_to_llm(sqlite_env, monkeypatch):
     fake_llm = FailFirstLLM()
     monkeypatch.setattr(
         orch, "execute_tool",
-        lambda tool, args: (_ for _ in ()).throw(ToolError("连接超时")),
+        lambda tool, args, ctx=None: (_ for _ in ()).throw(ToolError("连接超时")),
     )
     monkeypatch.setattr(orch, "get_llm_client", lambda *_: fake_llm)
 

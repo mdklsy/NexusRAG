@@ -1,5 +1,6 @@
-"""应用路由：CRUD、知识库绑定、API Key 管理。"""
+"""应用路由：CRUD、知识库绑定、API Key 管理、挂件签名密钥。"""
 
+import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,17 @@ from app.models.platform import ApiKey, User
 from app.schemas import ApiKeyCreated, ApiKeyOut, AppCreate, AppDetailOut, AppOut, AppUpdate
 
 router = APIRouter(prefix="/apps", tags=["apps"])
+
+
+def _new_widget_secret() -> str:
+    return secrets.token_hex(16)
+
+
+def _sanitize_widget_config(cfg: dict | None) -> dict:
+    """出库时摘掉 widget_secret（页面后端经专用接口获取，不进常规详情）。"""
+    cfg = dict(cfg or {})
+    cfg.pop("widget_secret", None)
+    return cfg
 
 
 async def _load_kb_ids(session: AsyncSession, app_id: uuid.UUID) -> list[uuid.UUID]:
@@ -51,6 +63,7 @@ async def list_apps(
         data = AppOut.model_validate(a).model_dump()
         data["llm_config"] = _sanitize_llm_config(a.llm_config)
         data["retrieval_config"] = _sanitize_retrieval_config(a.retrieval_config)
+        data["widget_config"] = _sanitize_widget_config(a.widget_config)
         out.append(AppDetailOut(**data, kb_ids=kb_map.get(a.id, [])))
     return out
 
@@ -115,6 +128,7 @@ def _app_detail(app: App, kb_ids: list) -> AppDetailOut:
     out = AppOut.model_validate(app).model_dump()
     out["llm_config"] = _sanitize_llm_config(app.llm_config)
     out["retrieval_config"] = _sanitize_retrieval_config(app.retrieval_config)
+    out["widget_config"] = _sanitize_widget_config(app.widget_config)
     return AppDetailOut(**out, kb_ids=kb_ids)
 
 
@@ -131,7 +145,10 @@ async def create_app(
         system_prompt=body.system_prompt,
         llm_config=_prepare_llm_config(body.llm_config),
         retrieval_config=_prepare_retrieval_config(body.retrieval_config),
-        widget_config=body.widget_config,
+        widget_config={
+            **(body.widget_config or {}),
+            "widget_secret": _new_widget_secret(),
+        },
     )
     session.add(app)
     await session.flush()
@@ -207,6 +224,13 @@ async def update_app(
         else:
             merged_rc.pop("rerank_config", None)
         data["retrieval_config"] = merged_rc
+    if "widget_config" in data:
+        # 合并式更新：UI 不回传 widget_secret（详情已摘除），保留旧值防丢
+        merged_w = dict(app.widget_config or {})
+        inc_w = dict(data["widget_config"] or {})
+        if "widget_secret" in merged_w and "widget_secret" not in inc_w:
+            inc_w["widget_secret"] = merged_w["widget_secret"]
+        data["widget_config"] = inc_w
     for field, value in data.items():
         setattr(app, field, value)
     if kb_ids is not None:
@@ -228,6 +252,27 @@ async def delete_app(
         raise HTTPException(404, "应用不存在")
     await session.delete(app)  # API Key/绑定/对话级联删除
     await session.commit()
+
+
+# ---------- 挂件签名密钥（页面后端用其为终端用户签 HMAC 票据） ----------
+
+
+@router.get("/{app_id}/widget-secret")
+async def get_widget_secret(
+    app_id: uuid.UUID,
+    _: User = Depends(require_role("editor")),
+    session: AsyncSession = Depends(get_session),
+):
+    """返回应用的 widget_secret；旧应用没有则自动生成（只此处可见，详情接口已摘除）。"""
+    app = await session.get(App, app_id)
+    if app is None:
+        raise HTTPException(404, "应用不存在")
+    wc = dict(app.widget_config or {})
+    if not wc.get("widget_secret"):
+        wc["widget_secret"] = _new_widget_secret()
+        app.widget_config = wc
+        await session.commit()
+    return {"widget_secret": wc["widget_secret"]}
 
 
 # ---------- API Keys ----------

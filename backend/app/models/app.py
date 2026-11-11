@@ -108,6 +108,7 @@ class Conversation(TimestampMixin, Base):
         ForeignKey("apps.id", ondelete="CASCADE"), index=True
     )
     title: Mapped[str] = mapped_column(String(300), default="新对话")
+    end_user_id: Mapped[str | None] = mapped_column(String(128), default=None, index=True)
     meta: Mapped[dict] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), default=dict)
 
 
