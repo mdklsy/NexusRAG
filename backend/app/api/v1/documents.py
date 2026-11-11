@@ -1,6 +1,7 @@
-"""文档路由：上传 / URL 导入 / 状态查询 / 删除 / 分块查看。"""
+"""文档路由：上传 / URL 导入 / 状态查询 / 删除 / 分块查看 / 重新分块。"""
 
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -14,9 +15,12 @@ from app.db.session import get_session
 from app.models.kb import Chunk, Document, KnowledgeBase
 from app.models.platform import User
 from app.schemas import ChunkOut, DocumentOut, DocumentUrlIn
-from app.services.ingestion.pipeline import purge_document
+from app.services.ingestion.pipeline import purge_document, reset_document
 
 router = APIRouter(tags=["documents"])
+
+IN_FLIGHT_STATUSES = {"pending", "parsing", "chunking", "embedding", "extracting_kg"}
+STUCK_AFTER_SECONDS = 600  # 进行中但超过 10 分钟无状态变更视为卡死，允许重新分块
 
 ALLOWED_EXTS = {".pdf", ".docx", ".xlsx", ".md", ".txt", ".csv", ".html", ".htm", ".json"}
 
@@ -121,6 +125,33 @@ async def delete_document(
     _: User = Depends(require_role("editor")),
 ):
     await purge_document(document_id)
+
+
+@router.post("/documents/{document_id}/reprocess", response_model=DocumentOut)
+async def reprocess_document(
+    document_id: uuid.UUID,
+    _: User = Depends(require_role("editor")),
+    session: AsyncSession = Depends(get_session),
+):
+    """清空已生成的分块/图谱并重新摄取。用于失败重试、恢复卡死任务（如 worker 重启中断）。"""
+    doc = await session.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(404, "文档不存在")
+    if doc.status in IN_FLIGHT_STATUSES:
+        updated = doc.updated_at
+        age = (
+            (datetime.now(timezone.utc) - updated).total_seconds()
+            if updated
+            else float("inf")
+        )
+        if age < STUCK_AFTER_SECONDS:
+            raise HTTPException(
+                409, "文档正在处理中，请稍后再试；若确认卡死，10 分钟后可重新分块"
+            )
+    await reset_document(document_id)
+    await dispatch_ingest(document_id)
+    await session.refresh(doc)
+    return doc
 
 
 @router.get("/documents/{document_id}/chunks", response_model=list[ChunkOut])

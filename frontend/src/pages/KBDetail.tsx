@@ -81,6 +81,16 @@ export default function KBDetail() {
     },
   });
 
+  // 重新分块：清空已生成的分块/图谱并重跑摄取管线（失败重试、卡死恢复）
+  const reingest = useMutation({
+    mutationFn: (id: string) => api.post(`/api/v1/documents/${id}/reprocess`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docs", kbId] });
+      message.success("已重新加入摄取队列");
+    },
+    onError: (e: any) => message.error(e.message),
+  });
+
   const addUrl = useMutation({
     mutationFn: () => api.post(`/api/v1/kbs/${kbId}/documents/url`, { url }),
     onSuccess: () => {
@@ -186,12 +196,21 @@ export default function KBDetail() {
             },
             {
               title: "操作",
-              width: 140,
+              width: 210,
               render: (_, r) => (
-                <Space>
+                <Space size={4}>
                   <Button size="small" onClick={() => setChunkDoc(r)}>
-                    分块
+                    预览
                   </Button>
+                  <Popconfirm
+                    title="重新分块该文档？"
+                    description="清空已生成的分块与图谱，重新摄取"
+                    onConfirm={() => reingest.mutate(r.id)}
+                  >
+                    <Button size="small" loading={reingest.isPending && reingest.variables === r.id}>
+                      重新分块
+                    </Button>
+                  </Popconfirm>
                   <Popconfirm title="删除该文档？" onConfirm={() => del.mutate(r.id)}>
                     <Button size="small" danger type="text">
                       删除

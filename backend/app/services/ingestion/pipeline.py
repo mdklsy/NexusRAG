@@ -111,7 +111,15 @@ async def ingest_document(document_id: uuid.UUID) -> None:
             saved_chunks.extend(batch)  # 仅计数用
 
         # ---------- 4. KG 抽取 ----------
-        await _set_document_status(document_id, "extracting_kg")
+        # 分块数提前落库：KG 抽取是最慢阶段（每块一次 LLM 调用），
+        # 若等完成才写，列表页在全程都显示 0，用户会误以为没有分块
+        async with session_scope() as session:
+            await session.execute(
+                update(Document)
+                .where(Document.id == document_id)
+                .values(status="extracting_kg", chunk_count=len(saved_chunks))
+            )
+            await session.commit()
         llm = get_llm_client()
         graph = get_graph_store()
         # 重新查出已入库的 chunk（按顺序），保证 evidence_chunk_id 正确
@@ -194,3 +202,50 @@ async def purge_document(document_id: uuid.UUID) -> None:
     if kb:
         store = get_vector_store()
         await store.delete_by_document(kb.id, document_id)
+
+
+async def reset_document(document_id: uuid.UUID) -> None:
+    """重新摄取前的清场：删分块/向量/KG 证据，复位状态，保留文档行与源文件。
+
+    与 purge_document 的区别：不删文档本身；KB 计数仅在文档曾完成时回退
+    （完成时才 +1，失败/中断的文档从未计入，不能误减）。
+    """
+    async with session_scope() as session:
+        doc = await session.get(Document, document_id)
+        if doc is None:
+            return
+        was_completed = doc.status == "completed"
+        chunk_count = await session.scalar(
+            select(func.count()).select_from(Chunk).where(Chunk.document_id == document_id)
+        )
+        kb = await session.get(KnowledgeBase, doc.kb_id)
+
+        # KG：先摘 evidence 指针（chunk_entities 由 FK 级联删除）
+        await session.execute(
+            update(Relation)
+            .where(Relation.evidence_chunk_id.in_(
+                select(Chunk.id).where(Chunk.document_id == document_id)
+            ))
+            .values(evidence_chunk_id=None)
+        )
+        await session.execute(delete(Chunk).where(Chunk.document_id == document_id))
+        await session.execute(
+            update(Document)
+            .where(Document.id == document_id)
+            .values(status="pending", error=None, chunk_count=0)
+        )
+        if kb and was_completed:
+            await session.execute(
+                update(KnowledgeBase)
+                .where(KnowledgeBase.id == kb.id)
+                .values(
+                    chunk_count=func.greatest(
+                        KnowledgeBase.chunk_count - (chunk_count or 0), 0
+                    ),
+                    doc_count=func.greatest(KnowledgeBase.doc_count - 1, 0),
+                )
+            )
+        await session.commit()
+
+    store = get_vector_store()
+    await store.delete_by_document(doc.kb_id, document_id)
