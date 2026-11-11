@@ -31,8 +31,47 @@
     theme: "#1677ff",
     title: "智能助手",
     welcome: "你好，请问有什么可以帮你？",
-    bubble: "💬",
+    bubble: "icon:comment",
   };
+
+  // 悬浮球图标：icon:<key> 用内置 SVG 图标库；img:<dataURL> 用用户上传图片；
+  // 其他值（旧数据 emoji）按文字渲染保持兼容
+  var BUBBLE_ICONS = {
+    comment:
+      '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    headset:
+      '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
+    robot:
+      '<rect x="4" y="9" width="16" height="11" rx="2"/><path d="M12 9V5M9 5h6"/><line x1="9" y1="14" x2="9.01" y2="14"/><line x1="15" y1="14" x2="15.01" y2="14"/>',
+    send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  };
+
+  function bubbleContent(val) {
+    var v = val || "icon:comment";
+    if (v.indexOf("img:") === 0) {
+      var img = document.createElement("img");
+      img.src = v.slice(4);
+      img.style.cssText =
+        "width:100%;height:100%;border-radius:50%;object-fit:cover;display:block";
+      return img;
+    }
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "26");
+    svg.setAttribute("height", "26");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "#fff");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    var name = v.indexOf("icon:") === 0 ? v.slice(5) : "";
+    if (!BUBBLE_ICONS[name]) {
+      // 旧数据：非 icon:/img: 的值当作 emoji/文字
+      return document.createTextNode(v || "💬");
+    }
+    svg.innerHTML = BUBBLE_ICONS[name];
+    return svg;
+  }
 
   var state = {
     cfg: DEFAULTS,
@@ -101,7 +140,7 @@
       ".bubble{position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%;background:" +
       theme +
       ";color:#fff;font-size:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:2147483000;transition:transform .15s}" +
-      ".bubble:hover{transform:scale(1.08)}" +
+      ".bubble:hover{transform:scale(1.08)}.bubble svg{pointer-events:none}.bubble img{pointer-events:none}" +
       ".panel{position:fixed;right:20px;bottom:90px;width:360px;max-width:calc(100vw - 32px);height:520px;max-height:calc(100vh - 120px);background:#fff;border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,.2);display:none;flex-direction:column;overflow:hidden;z-index:2147483000}" +
       ".panel.open{display:flex}" +
       ".hd{background:" +
@@ -150,7 +189,8 @@
     style.textContent = css(state.cfg.theme);
     root.appendChild(style);
 
-    var bubble = el("div", "bubble", state.cfg.bubble);
+    var bubble = el("div", "bubble");
+    bubble.appendChild(bubbleContent(state.cfg.bubble));
     var panel = el("div", "panel");
 
     var hd = el("div", "hd");

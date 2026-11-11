@@ -5,6 +5,7 @@ import {
   ExperimentOutlined,
   LogoutOutlined,
   DashboardOutlined,
+  SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -25,7 +26,10 @@ export default function Layout() {
     { key: "/evals", icon: <ExperimentOutlined />, label: "评测" },
     { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
     ...(role === "admin"
-      ? [{ key: "/users", icon: <TeamOutlined />, label: "用户" }]
+      ? [
+          { key: "/users", icon: <TeamOutlined />, label: "用户" },
+          { key: "/settings", icon: <SettingOutlined />, label: "设置" },
+        ]
       : []),
   ];
 

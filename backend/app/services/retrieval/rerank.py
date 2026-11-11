@@ -91,11 +91,12 @@ async def api_rerank(query: str, chunks: list[RetrievedChunk]) -> list[Retrieved
     """托管 Rerank API（SiliconFlow/Jina/Cohere 风格 /rerank）；失败容错原样返回。"""
     if len(chunks) <= 1:
         return chunks
-    from app.core.config import get_settings
+    from app.core import runtime_settings
 
-    cfg = get_settings()
-    if not (cfg.rerank_api_base and cfg.rerank_api_key):
-        logger.warning("rerank=api 但 RERANK_API_BASE/KEY 未配置，跳过重排")
+    await runtime_settings.ensure_fresh()
+    cfg = runtime_settings.get_global("rerank")
+    if not (cfg["api_base"] and cfg["api_key"]):
+        logger.warning("rerank=api 但托管重排未配置（设置页 / .env RERANK_API_*），跳过重排")
         return chunks
     try:
         import httpx
@@ -104,10 +105,10 @@ async def api_rerank(query: str, chunks: list[RetrievedChunk]) -> list[Retrieved
             trust_env=False, timeout=15  # 绕过系统代理：直连托管 API
         ) as client:
             resp = await client.post(
-                cfg.rerank_api_base.rstrip("/") + "/rerank",
-                headers={"Authorization": f"Bearer {cfg.rerank_api_key}"},
+                cfg["api_base"].rstrip("/") + "/rerank",
+                headers={"Authorization": f"Bearer {cfg['api_key']}"},
                 json={
-                    "model": cfg.rerank_model,
+                    "model": cfg["model"],
                     "query": query,
                     "documents": [c.content[:1500] for c in chunks],
                     "top_n": len(chunks),

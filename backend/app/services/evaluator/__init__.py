@@ -61,6 +61,9 @@ def check_hit(expected_doc_name: str, retrieved_names: list[str]) -> bool | None
 
 
 async def run_eval(run_id: uuid.UUID) -> None:
+    from app.core import runtime_settings
+
+    await runtime_settings.ensure_fresh()
     """执行整个评测运行。由 API 派发（ARQ 或 inline）。"""
     async with session_scope() as session:
         run = await session.get(EvalRun, run_id)

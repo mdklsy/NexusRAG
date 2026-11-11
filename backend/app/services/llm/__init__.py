@@ -142,11 +142,14 @@ class EmbeddingClient:
 def get_llm_client(app_llm_config: dict | None = None) -> LLMClient:
     """app_llm_config 可覆盖 model / api_base / api_key（应用级凭证优先于全局）。
 
+    全局值 = 「设置」页的页面配置（system_settings 表）> .env。
     llm_config 中的 api_key_enc 为 AES 加密密文（由 API 层写入时加密）。
     """
-    s = get_settings()
+    from app.core.runtime_settings import get_global
+
+    g = get_global("llm")
     cfg = app_llm_config or {}
-    model = cfg.get("model") or s.llm_model
+    model = cfg.get("model") or g["model"]
 
     api_base = cfg.get("api_base") or ""
     api_key = ""
@@ -158,12 +161,14 @@ def get_llm_client(app_llm_config: dict | None = None) -> LLMClient:
         except Exception:  # noqa: BLE001 解密失败回退全局
             api_key = ""
     if not api_base:
-        api_base = s.effective_llm_base
+        api_base = g["api_base"]
     if not api_key:
-        api_key = s.effective_llm_key
+        api_key = g["api_key"]
     return LLMClient(api_base, api_key, model)
 
 
 def get_embedding_client() -> EmbeddingClient:
-    s = get_settings()
-    return EmbeddingClient(s.effective_embedding_base, s.effective_embedding_key, s.embedding_model)
+    from app.core.runtime_settings import get_global
+
+    g = get_global("embedding")
+    return EmbeddingClient(g["api_base"], g["api_key"], g["model"])

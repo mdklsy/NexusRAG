@@ -47,6 +47,9 @@ async def retrieve(
     query: str,
     config: dict | None = None,
 ) -> RetrievalResult:
+    from app.core import runtime_settings
+
+    await runtime_settings.ensure_fresh()
     """混合检索（向量 + BM25 RRF 融合）→ 重排 → KG 子图增强。"""
     config = config or {}
     top_k = int(config.get("top_k", 5))

@@ -32,6 +32,14 @@ app.add_middleware(
 app.include_router(api_router)
 
 
+@app.on_event("startup")
+async def _load_runtime_settings():
+    # 启动即加载页面级全局配置（模型/向量/重排），TTL 内惰性刷新
+    from app.core import runtime_settings
+
+    await runtime_settings.refresh()
+
+
 @app.get("/healthz", tags=["meta"])
 async def healthz():
     return {"status": "ok", "service": "nexusrag-api"}

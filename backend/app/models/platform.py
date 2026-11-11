@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -36,3 +36,15 @@ class ApiKey(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     scope: Mapped[str] = mapped_column(String(20), default="full")  # full | chat(挂件用)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SystemSetting(Base):
+    """运行时全局配置（页面管理，覆盖 .env）：llm / embedding / rerank。"""
+
+    __tablename__ = "system_settings"
+
+    skey: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

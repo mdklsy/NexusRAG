@@ -55,6 +55,9 @@ services:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embedding-3}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      RERANK_API_BASE: ${RERANK_API_BASE:-}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@nexusrag.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       UPLOAD_DIR: /data/uploads
@@ -88,6 +91,9 @@ services:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embedding-3}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      RERANK_API_BASE: ${RERANK_API_BASE:-}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
       UPLOAD_DIR: /data/uploads
     volumes:
       - uploads:/data/uploads

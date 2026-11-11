@@ -42,6 +42,9 @@ async def _read_source_text(document: Document) -> str:
 
 
 async def ingest_document(document_id: uuid.UUID) -> None:
+    from app.core import runtime_settings
+
+    await runtime_settings.ensure_fresh()
     """文档摄取全流程。任何阶段失败都会把文档置为 failed。"""
     async with session_scope() as session:
         doc = await session.get(Document, document_id)

@@ -2,6 +2,7 @@
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -149,6 +150,9 @@ async def run_chat(
     question: str,
     history: list[dict],
 ) -> AsyncGenerator[dict]:
+    from app.core import runtime_settings
+
+    await runtime_settings.ensure_fresh()
     """产出 SSE 事件流。事件 type：intent / retrieval / delta / citations / usage / done。"""
     start = time.monotonic()
     config = app.retrieval_config or {}
@@ -216,8 +220,16 @@ async def run_chat(
     # 4. 落库：消息 + 用量事件
     latency_ms = int((time.monotonic() - start) * 1000)
     conversation = await session.get(Conversation, conversation_id)
+    # 同一事务里 created_at 相同（PG now() 取事务时间），显式错开 1µs
+    # 保证 user -> assistant 的展示顺序稳定（否则按随机 uuid 次级排序会乱）
+    base_ts = datetime.now(timezone.utc)
     session.add(
-        Message(conversation_id=conversation_id, role="user", content=question)
+        Message(
+            conversation_id=conversation_id,
+            role="user",
+            content=question,
+            created_at=base_ts,
+        )
     )
     session.add(
         Message(
@@ -228,6 +240,7 @@ async def run_chat(
             tokens_in=usage.get("tokens_in", 0),
             tokens_out=usage.get("tokens_out", 0),
             latency_ms=latency_ms,
+            created_at=base_ts + timedelta(microseconds=1),
         )
     )
     session.add(

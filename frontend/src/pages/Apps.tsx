@@ -2,6 +2,9 @@ import {
   Alert,
   Button,
   Card,
+  Radio,
+  Tabs,
+  Upload,
   Col,
   Empty,
   Form,
@@ -19,7 +22,16 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { ApiOutlined, KeyOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  ApiOutlined,
+  CommentOutlined,
+  CustomerServiceOutlined,
+  KeyOutlined,
+  PlusOutlined,
+  RobotOutlined,
+  SendOutlined,
+  UploadOutlined,
+} from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useState } from "react";
@@ -38,17 +50,66 @@ interface AppRow {
 
 const ICONS = ["🤖", "💬", "📚", "🛎️", "🎯", "💡", "⚖️", "🏥", "🏢", "🛒"];
 
+function BubblePreview({ value }: { value?: string }) {
+  const v = value || "icon:comment";
+  let inner: any;
+  if (v.startsWith("img:")) {
+    inner = (
+      <img
+        src={v.slice(4)}
+        alt="bubble"
+        style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }}
+      />
+    );
+  } else {
+    const key = v.startsWith("icon:") ? v.slice(5) : "";
+    const map: Record<string, any> = {
+      comment: <CommentOutlined />,
+      headset: <CustomerServiceOutlined />,
+      robot: <RobotOutlined />,
+      send: <SendOutlined />,
+    };
+    inner = map[key] ?? v; // 旧数据的 emoji 直接展示（兼容）
+  }
+  return (
+    <span
+      style={{
+        width: 44,
+        height: 44,
+        borderRadius: "50%",
+        background: "#1677ff",
+        color: "#fff",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 20,
+        overflow: "hidden",
+        flexShrink: 0,
+      }}
+    >
+      {inner}
+    </span>
+  );
+}
+
 function ConfigForm({
   form,
   kbs,
+  editingId,
 }: {
   form: any;
   kbs: { id: string; name: string }[];
+  editingId?: string;
 }) {
   const kgOn = Form.useWatch(["retrieval_config", "use_kg"], form);
   const rerank = Form.useWatch(["retrieval_config", "rerank"], form);
+  const bubbleVal = Form.useWatch(["widget_config", "bubble"], form) as string | undefined;
   return (
     <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 6, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
+      <Tabs
+        items={[
+          { key: "basic", label: "基本信息", forceRender: true, children: (
+        <>
       <Row gutter={12}>
         <Col span={12}>
           <Form.Item name="name" label="应用名称" rules={[{ required: true }]}>
@@ -70,7 +131,11 @@ function ConfigForm({
           placeholder="你是 XX 公司的智能客服，语气专业友好…"
         />
       </Form.Item>
-      <Typography.Title level={5}>模型（留空 = 使用全局配置）</Typography.Title>
+        </>
+      ) },
+          { key: "model", label: "模型", forceRender: true, children: (
+        <>
+      <Typography.Title level={5}>模型（留空 = 使用「设置」页的全局配置）</Typography.Title>
       <Row gutter={12}>
         <Col span={8}>
           <Form.Item name={["llm_config", "model"]} label="模型名">
@@ -106,6 +171,10 @@ function ConfigForm({
           </Form.Item>
         </Col>
       </Row>
+        </>
+      ) },
+          { key: "retrieval", label: "检索策略", forceRender: true, children: (
+        <>
       <Typography.Title level={5} style={{ marginBottom: 4 }}>
         检索策略
       </Typography.Title>
@@ -219,7 +288,7 @@ function ConfigForm({
           showIcon
           style={{ marginBottom: 16 }}
           message="托管重排使用全局配置，应用内无需填写"
-          description="在部署目录 .env 中配置 RERANK_API_BASE / RERANK_API_KEY / RERANK_MODEL（默认 BAAI/bge-reranker-v2-m3，硅基流动免费档）。"
+          description="在「设置」页配置重排服务的 API Base / Key（默认模型 BAAI/bge-reranker-v2-m3，硅基流动免费档）；旧版 .env 方式仍兼容。"
         />
       )}
       {rerank === "cross_encoder" && (
@@ -241,6 +310,10 @@ function ConfigForm({
         />
       )}
 
+        </>
+      ) },
+          { key: "widget", label: "网页挂件", forceRender: true, children: (
+        <>
       <Typography.Title level={5} style={{ marginBottom: 4 }}>
         网页挂件
       </Typography.Title>
@@ -269,15 +342,6 @@ function ConfigForm({
         </Col>
         <Col span={8}>
           <Form.Item
-            name={["widget_config", "bubble"]}
-            label="按钮图标"
-            extra={<span style={{ fontSize: 12 }}>悬浮球 emoji</span>}
-          >
-            <Input placeholder="💬" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item
             name={["widget_config", "welcome"]}
             label="欢迎语"
             extra={<span style={{ fontSize: 12 }}>用户打开挂件时先展示的一句话</span>}
@@ -285,7 +349,58 @@ function ConfigForm({
             <Input placeholder="你好，请问有什么可以帮你？" />
           </Form.Item>
         </Col>
+        <Col span={24}>
+          <Form.Item
+            label="悬浮球图标"
+            tooltip="挂件右下角悬浮球的图标：内置图标库任选，或上传一张小图（≤200KB，自动裁圆展示）"
+            extra={<span style={{ fontSize: 12 }}>上传图片会覆盖已选图标；保存后即时生效</span>}
+          >
+            <Space align="center" size={12} wrap>
+              <BubblePreview value={bubbleVal} />
+              <Form.Item name={["widget_config", "bubble"]} noStyle>
+                <Radio.Group defaultValue="icon:comment">
+                  <Radio.Button value="icon:comment" title="对话气泡">
+                    <CommentOutlined />
+                  </Radio.Button>
+                  <Radio.Button value="icon:headset" title="客服耳机">
+                    <CustomerServiceOutlined />
+                  </Radio.Button>
+                  <Radio.Button value="icon:robot" title="机器人">
+                    <RobotOutlined />
+                  </Radio.Button>
+                  <Radio.Button value="icon:send" title="发送箭头">
+                    <SendOutlined />
+                  </Radio.Button>
+                </Radio.Group>
+              </Form.Item>
+              <Upload
+                accept="image/*"
+                showUploadList={false}
+                beforeUpload={(file) => {
+                  if (file.size > 200 * 1024) {
+                    message.error("图片请小于 200KB");
+                    return Upload.LIST_IGNORE;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () =>
+                    form.setFieldValue(["widget_config", "bubble"], "img:" + String(reader.result));
+                  reader.readAsDataURL(file);
+                  return false;
+                }}
+              >
+                <Button icon={<UploadOutlined />}>上传图片</Button>
+              </Upload>
+            </Space>
+          </Form.Item>
+        </Col>
       </Row>
+        </>
+      ) },
+          ...(editingId
+            ? [{ key: "tools", label: "业务工具", forceRender: true, children: <ToolsSection appId={editingId} /> }]
+            : []),
+        ]}
+      />
     </Form>
   );
 }
@@ -572,7 +687,6 @@ export default function Apps() {
             title: "应用",
             render: (_, r) => (
               <Space>
-                <span style={{ fontSize: 20 }}>{r.icon}</span>
                 <div>
                   <div>{r.name}</div>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -654,12 +768,7 @@ export default function Apps() {
           </Button>,
         ]}
       >
-        <ConfigForm form={form} kbs={kbs || []} />
-        {editing && (
-          <div style={{ marginTop: 24 }}>
-            <ToolsSection appId={editing.id} />
-          </div>
-        )}
+        <ConfigForm form={form} kbs={kbs || []} editingId={editing?.id} />
       </Modal>
 
       <Modal
