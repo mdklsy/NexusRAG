@@ -91,17 +91,6 @@
     hist: { convs: [], convIdx: -1, hasMore: false, oldestId: null, loading: false, loaded: false, done: false },
   };
 
-  // 对话过程展示档位（应用 widget_config.process_display 下发）：
-  //   full  = 完整协作（规划/agent接手/工具全显示）
-  //   tools = 仅工具调用行（默认：不显示规划与 agent 接手过程）
-  //   none  = 只出最终回答
-  function procOK(kind) {
-    var d = state.cfg.process_display || "tools";
-    if (d === "none") return false;
-    if (d === "full") return true;
-    return kind === "tool"; // tools 档：工具行显示，规划/接手/完成行不显示
-  }
-
   // ---------- SSE ----------
 
   function postChat(question, onEvent, done, fail) {
@@ -568,40 +557,18 @@
     var typing = showTyping();
     var bubbleEl = null;
     var citations = null;
-    var toolLines = [];
 
     postChat(
       text,
       function (ev) {
         if (ev.type === "conversation") {
           state.conversationId = ev.conversation_id;
-        } else if (ev.type === "plan") {
-          var subs = ev.subtasks || [];
-          if (subs.length && procOK("agent")) {
-            toolLines.push("📋 规划 " + subs.length + " 个子任务：" +
-              subs.map(function (s) { return (s.worker || "") + "·" + (s.title || ""); }).join("、"));
-          }
-        } else if (ev.type === "agent_start") {
-          if (procOK("agent")) toolLines.push("🤖 " + ev.agent + " 接手：" + (ev.task || "") + "…");
-        } else if (ev.type === "agent_done") {
-          if (procOK("agent")) toolLines.push("✅ " + ev.agent + " 完成");
-        } else if (ev.type === "tool_call") {
-          if (procOK("tool")) {
-            var tag = ev.agent ? "[" + ev.agent + "] " : "";
-            toolLines.push(tag + "⚙ 调用 " + ev.name + "…");
-          }
-        } else if (ev.type === "tool_result") {
-          if (procOK("tool")) {
-            var tag2 = ev.agent ? "[" + ev.agent + "] " : "";
-            toolLines.push(tag2 + (ev.ok ? "✓ " : "✗ ") + ev.name + " 完成");
-          }
         } else if (ev.type === "delta") {
+          // 过程类事件（plan/agent_start/agent_done/tool_call/tool_result）按产品决定
+          // 永不展示——规划与工具调用细节由最终回答的文字交代
           if (!bubbleEl) {
             typing.remove();
             bubbleEl = appendBot("");
-            if (toolLines.length) {
-              bubbleEl.appendChild(el("div", "tools", toolLines.join("　")));
-            }
             var txt = el("span", "txt");
             bubbleEl.appendChild(txt);
             bubbleEl.__txt = txt;
@@ -673,11 +640,6 @@
         if (cfg.welcome) state.cfg.welcome = cfg.welcome;
         if (cfg.theme) state.cfg.theme = cfg.theme;
         if (cfg.bubble) state.cfg.bubble = cfg.bubble;
-        // 对话过程展示档位（应用 widget_config.process_display）：
-        // full=规划/agent接手/工具全显示 | tools=仅工具行 | none=只出最终回答
-        if (["full", "tools", "none"].indexOf(cfg.process_display) !== -1) {
-          state.cfg.process_display = cfg.process_display;
-        }
       })
       .catch(function (e) {
         console.warn("[NexusChat] 配置拉取失败，使用默认值", e);

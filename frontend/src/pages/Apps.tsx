@@ -106,8 +106,19 @@ function ConfigForm({
   const rerank = Form.useWatch(["retrieval_config", "rerank"], form);
   const bubbleVal = Form.useWatch(["widget_config", "bubble"], form) as string | undefined;
   const rerankCfg = Form.useWatch(["retrieval_config", "rerank_config"], form) as any;
+  const agentMode = Form.useWatch(["agent_ui", "mode"], form);
+  // 工具白名单多选数据源：与业务工具页签共用一份查询缓存
+  const { data: agentToolList } = useQuery({
+    queryKey: ["tools", editingId],
+    queryFn: () => api.get<any[]>(`/api/v1/apps/${editingId}/tools`),
+    enabled: !!editingId,
+  });
+  const agentToolOptions = (agentToolList || []).map((t: any) => ({
+    value: t.name,
+    label: `${t.name}（${t.type === "http_api" ? "HTTP" : "SQL"}）`,
+  }));
   return (
-    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
+    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", model: "", agent_ui: { mode: "single", max_subtasks: 3, workers: [] } }}>
       <Tabs
         items={[
           { key: "basic", label: "基本信息", forceRender: true, children: (
@@ -347,44 +358,103 @@ function ConfigForm({
           description="无需额外配置，但每轮多一次模型调用，速度稍慢。"
         />
       )}
-      <Form.Item
-        name={["retrieval_config", "agent_config_json"]}
-        label="多代理协作（可选，留空 = 单代理模式）"
-        tooltip="启用多 agent：规划器把问题拆成子任务分发给多个代理（各自系统提示词与工具白名单）执行后汇总回答。成本约为单代理的 2~3 倍，简单问答建议保持单代理。"
-        rules={[
-          {
-            validator: (_, v) => {
-              if (v === undefined || v === null || String(v).trim() === "") return Promise.resolve();
-              try {
-                const o = JSON.parse(v);
-                if (o && typeof o === "object") return Promise.resolve();
-                return Promise.reject(new Error("需为 JSON 对象"));
-              } catch {
-                return Promise.reject(new Error("JSON 格式不合法"));
-              }
-            },
-          },
-        ]}
-        extra={
-          <span style={{ fontSize: 12 }}>
-            JSON 对象：mode 填 planner_workers 启用；workers 为代理名单（name/system_prompt/tool_names 白名单/max_rounds）。留空 = 单代理。
-          </span>
-        }
-      >
-        <Input.TextArea
-          rows={5}
-          placeholder={`{
-  "mode": "planner_workers",
-  "max_subtasks": 3,
-  "workers": [
-    {"name": "数据查询员", "system_prompt": "你是数据查询专家…", "tool_names": [""], "max_rounds": 2},
-    {"name": "资料检索员", "system_prompt": "你是资料检索专家…"}
-  ]
-}`}
-          style={{ fontFamily: "monospace", fontSize: 12 }}
-        />
-      </Form.Item>
-
+        </>
+      ) },
+          { key: "agents", label: "多代理协作", forceRender: true, children: (
+        <>
+      <Typography.Title level={5} style={{ marginBottom: 4 }}>
+        多代理协作（可选）
+      </Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12 }}>
+        单代理（默认）：一个模型在工具循环里自主决策。多代理：规划器把问题拆成子任务分发给下列代理各自执行（各自系统提示词与工具白名单），最后汇总回答——能力更强，但耗时与 token 约为单代理的 2~3 倍，简单问答建议保持单代理。
+      </Typography.Paragraph>
+      <Row gutter={16}>
+        <Col span={10}>
+          <Form.Item name={["agent_ui", "mode"]} label="协作模式">
+            <Radio.Group>
+              <Radio.Button value="single">单代理（默认）</Radio.Button>
+              <Radio.Button value="planner_workers">多代理</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+        </Col>
+        {agentMode === "planner_workers" && (
+          <Col span={6}>
+            <Form.Item
+              name={["agent_ui", "max_subtasks"]}
+              label="最多子任务数"
+              extra={<span style={{ fontSize: 12 }}>规划器一次最多拆几个子任务（1~8）</span>}
+            >
+              <InputNumber min={1} max={8} style={{ width: "100%" }} />
+            </Form.Item>
+          </Col>
+        )}
+      </Row>
+      {agentMode === "planner_workers" && (
+        <>
+          <Typography.Text strong>代理名单</Typography.Text>
+          <Form.List name={["agent_ui", "workers"]}>
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map(({ key, name, ...restField }) => (
+                  <Card
+                    key={key}
+                    size="small"
+                    style={{ marginBottom: 8 }}
+                    extra={
+                      <Popconfirm title="删除该代理？" onConfirm={() => remove(name)}>
+                        <Button size="small" danger type="text">
+                          删
+                        </Button>
+                      </Popconfirm>
+                    }
+                  >
+                    <Row gutter={12}>
+                      <Col span={6}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, "name"]}
+                          label="代理名称"
+                          rules={[{ required: true, message: "必填" }]}
+                        >
+                          <Input placeholder="数据查询员" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={10}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, "system_prompt"]}
+                          label="系统提示词（职责）"
+                          rules={[{ required: true, message: "必填" }]}
+                        >
+                          <Input.TextArea rows={2} placeholder="你是任务数据查询专家：调用业务接口查询统计并解读数字。" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={5}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, "tool_names"]}
+                          label="工具白名单"
+                          tooltip="不选 = 可用全部业务工具；配置里写了但业务工具里不存在的名字会被忽略并提示规划器"
+                        >
+                          <Select mode="multiple" allowClear placeholder="全部工具" options={agentToolOptions} maxTagCount={2} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={3}>
+                        <Form.Item {...restField} name={[name, "max_rounds"]} label="轮数" initialValue={2}>
+                          <InputNumber min={1} max={6} style={{ width: "100%" }} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  </Card>
+                ))}
+                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ max_rounds: 2 })} block>
+                  添加代理
+                </Button>
+              </>
+            )}
+          </Form.List>
+        </>
+      )}
         </>
       ) },
           { key: "widget", label: "网页挂件", forceRender: true, children: (
@@ -423,24 +493,6 @@ function ConfigForm({
             extra={<span style={{ fontSize: 12 }}>用户打开挂件时先展示的一句话</span>}
           >
             <Input placeholder="你好，请问有什么可以帮你？" />
-          </Form.Item>
-        </Col>
-        <Col span={8}>
-          <Form.Item
-            name={["widget_config", "process_display"]}
-            label="对话过程展示"
-            tooltip="回答上方的灰色小字过程行显示多少：完整协作含多代理的规划与接手过程；默认只显示工具调用行；不显示则只出最终回答。"
-            extra={<span style={{ fontSize: 12 }}>多代理模式下可配「不显示」隐藏规划过程</span>}
-          >
-            <Select
-              allowClear
-              placeholder="仅工具调用（默认）"
-              options={[
-                { value: "full", label: "完整协作（规划 + 接手 + 工具）" },
-                { value: "tools", label: "仅工具调用行（默认）" },
-                { value: "none", label: "不显示（只出最终回答）" },
-              ]}
-            />
           </Form.Item>
         </Col>
         <Col span={24}>
@@ -746,16 +798,24 @@ export default function Apps() {
 
   const save = useMutation({
     mutationFn: (values: any) => {
-      const { agent_config_json, ...rest } = values;
+      const { agent_ui, ...rest } = values;
       let agentConfig: any = {};
-      if (agent_config_json !== undefined && String(agent_config_json).trim() !== "") {
-        agentConfig = JSON.parse(agent_config_json); // 合法性由表单规则先行校验
+      if (agent_ui?.mode === "planner_workers") {
+        agentConfig = {
+          mode: "planner_workers",
+          max_subtasks: agent_ui.max_subtasks ?? 3,
+          workers: (agent_ui.workers || []).map((w: any) => ({
+            name: w.name,
+            system_prompt: w.system_prompt,
+            ...(w.tool_names?.length ? { tool_names: w.tool_names } : {}),
+            max_rounds: w.max_rounds ?? 2,
+          })),
+        };
       }
       const payload = {
         ...rest,
         retrieval_config: { ...(values.retrieval_config || {}), agent_config: agentConfig },
       };
-      delete (payload.retrieval_config as any).agent_config_json;
       return editing
         ? api.put(`/api/v1/apps/${editing.id}`, payload)
         : api.post("/api/v1/apps", payload);
@@ -796,10 +856,20 @@ export default function Apps() {
     const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", ...rcRest };
     form.setFieldsValue({
       ...detail,
-      retrieval_config: {
-        ...rc,
-        agent_config_json: agentCfg && Object.keys(agentCfg).length ? JSON.stringify(agentCfg, null, 2) : undefined,
-      },
+      retrieval_config: rc,
+      agent_ui:
+        agentCfg && agentCfg.mode === "planner_workers"
+          ? {
+              mode: "planner_workers",
+              max_subtasks: agentCfg.max_subtasks ?? 3,
+              workers: (agentCfg.workers || []).map((w: any) => ({
+                name: w.name,
+                system_prompt: w.system_prompt,
+                tool_names: w.tool_names || [],
+                max_rounds: w.max_rounds ?? 2,
+              })),
+            }
+          : { mode: "single", max_subtasks: 3, workers: [] },
     });
     form.setFieldValue(["llm_config", "model"], detail.llm_config?.model || "");
     form.setFieldValue(["llm_config", "temperature"], detail.llm_config?.temperature ?? 0.3);
