@@ -13,6 +13,9 @@ router = APIRouter(prefix="/widget", tags=["widget"])
 async def widget_config(app: App = Depends(get_app_by_api_key)):
     """挂件初始化配置（API Key 认证；建议为挂件单独发 scope=chat 的 Key）。"""
     cfg = app.widget_config or {}
+    display = cfg.get("process_display")
+    if display not in ("full", "tools", "none"):
+        display = "tools"  # 旧应用/非法值回退默认：只显示工具调用行
     return WidgetConfigOut(
         app_id=app.id,
         title=cfg.get("title") or app.name,
@@ -20,4 +23,5 @@ async def widget_config(app: App = Depends(get_app_by_api_key)):
         theme=cfg.get("theme") or "#1677ff",
         bubble=cfg.get("bubble") or "💬",
         app_name=app.name,
+        process_display=display,
     )

@@ -347,6 +347,43 @@ function ConfigForm({
           description="无需额外配置，但每轮多一次模型调用，速度稍慢。"
         />
       )}
+      <Form.Item
+        name={["retrieval_config", "agent_config_json"]}
+        label="多代理协作（可选，留空 = 单代理模式）"
+        tooltip="启用多 agent：规划器把问题拆成子任务分发给多个代理（各自系统提示词与工具白名单）执行后汇总回答。成本约为单代理的 2~3 倍，简单问答建议保持单代理。"
+        rules={[
+          {
+            validator: (_, v) => {
+              if (v === undefined || v === null || String(v).trim() === "") return Promise.resolve();
+              try {
+                const o = JSON.parse(v);
+                if (o && typeof o === "object") return Promise.resolve();
+                return Promise.reject(new Error("需为 JSON 对象"));
+              } catch {
+                return Promise.reject(new Error("JSON 格式不合法"));
+              }
+            },
+          },
+        ]}
+        extra={
+          <span style={{ fontSize: 12 }}>
+            JSON 对象：mode 填 planner_workers 启用；workers 为代理名单（name/system_prompt/tool_names 白名单/max_rounds）。留空 = 单代理。
+          </span>
+        }
+      >
+        <Input.TextArea
+          rows={5}
+          placeholder={`{
+  "mode": "planner_workers",
+  "max_subtasks": 3,
+  "workers": [
+    {"name": "数据查询员", "system_prompt": "你是数据查询专家…", "tool_names": [""], "max_rounds": 2},
+    {"name": "资料检索员", "system_prompt": "你是资料检索专家…"}
+  ]
+}`}
+          style={{ fontFamily: "monospace", fontSize: 12 }}
+        />
+      </Form.Item>
 
         </>
       ) },
@@ -386,6 +423,24 @@ function ConfigForm({
             extra={<span style={{ fontSize: 12 }}>用户打开挂件时先展示的一句话</span>}
           >
             <Input placeholder="你好，请问有什么可以帮你？" />
+          </Form.Item>
+        </Col>
+        <Col span={8}>
+          <Form.Item
+            name={["widget_config", "process_display"]}
+            label="对话过程展示"
+            tooltip="回答上方的灰色小字过程行显示多少：完整协作含多代理的规划与接手过程；默认只显示工具调用行；不显示则只出最终回答。"
+            extra={<span style={{ fontSize: 12 }}>多代理模式下可配「不显示」隐藏规划过程</span>}
+          >
+            <Select
+              allowClear
+              placeholder="仅工具调用（默认）"
+              options={[
+                { value: "full", label: "完整协作（规划 + 接手 + 工具）" },
+                { value: "tools", label: "仅工具调用行（默认）" },
+                { value: "none", label: "不显示（只出最终回答）" },
+              ]}
+            />
           </Form.Item>
         </Col>
         <Col span={24}>
@@ -690,10 +745,21 @@ export default function Apps() {
   });
 
   const save = useMutation({
-    mutationFn: (values: any) =>
-      editing
-        ? api.put(`/api/v1/apps/${editing.id}`, values)
-        : api.post("/api/v1/apps", values),
+    mutationFn: (values: any) => {
+      const { agent_config_json, ...rest } = values;
+      let agentConfig: any = {};
+      if (agent_config_json !== undefined && String(agent_config_json).trim() !== "") {
+        agentConfig = JSON.parse(agent_config_json); // 合法性由表单规则先行校验
+      }
+      const payload = {
+        ...rest,
+        retrieval_config: { ...(values.retrieval_config || {}), agent_config: agentConfig },
+      };
+      delete (payload.retrieval_config as any).agent_config_json;
+      return editing
+        ? api.put(`/api/v1/apps/${editing.id}`, payload)
+        : api.post("/api/v1/apps", payload);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["apps"] });
       setEditing(null);
@@ -725,10 +791,15 @@ export default function Apps() {
     const detail = await api.get<AppRow>(`/api/v1/apps/${app.id}`);
     setEditing(detail);
     // 旧数据可能缺某个检索参数：与默认值合并，避免表单显示空、保存时丢字段
-    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", ...(detail.retrieval_config || {}) };
+    const rawRc = detail.retrieval_config || {};
+    const { agent_config: agentCfg, ...rcRest } = rawRc;
+    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", ...rcRest };
     form.setFieldsValue({
       ...detail,
-      retrieval_config: rc,
+      retrieval_config: {
+        ...rc,
+        agent_config_json: agentCfg && Object.keys(agentCfg).length ? JSON.stringify(agentCfg, null, 2) : undefined,
+      },
     });
     form.setFieldValue(["llm_config", "model"], detail.llm_config?.model || "");
     form.setFieldValue(["llm_config", "temperature"], detail.llm_config?.temperature ?? 0.3);

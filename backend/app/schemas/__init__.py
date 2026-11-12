@@ -175,6 +175,8 @@ class WidgetConfigOut(BaseModel):
     theme: str
     bubble: str
     app_name: str
+    # 对话过程展示档位：full=完整协作（规划/agent接手/工具）| tools=仅工具调用行 | none=只出最终回答
+    process_display: str = "tools"
 
 
 # ---------- Eval（评测） ----------
