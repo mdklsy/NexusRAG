@@ -107,7 +107,7 @@ function ConfigForm({
   const bubbleVal = Form.useWatch(["widget_config", "bubble"], form) as string | undefined;
   const rerankCfg = Form.useWatch(["retrieval_config", "rerank_config"], form) as any;
   return (
-    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
+    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", model: "" }}>
       <Tabs
         items={[
           { key: "basic", label: "基本信息", forceRender: true, children: (
@@ -212,6 +212,16 @@ function ConfigForm({
             extra={<span style={{ fontSize: 12 }}>多轮对话的上下文条数</span>}
           >
             <InputNumber min={0} max={20} style={{ width: "100%" }} />
+          </Form.Item>
+        </Col>
+        <Col span={6}>
+          <Form.Item
+            name={["retrieval_config", "tool_rounds"]}
+            label="工具轮数"
+            tooltip="单条消息里 LLM 最多连续调用几轮业务工具。调大可完成「查表结构→查数据→纠错重查」这类长链路，代价是更多 token。"
+            extra={<span style={{ fontSize: 12 }}>1~6，默认 2</span>}
+          >
+            <InputNumber min={1} max={6} style={{ width: "100%" }} />
           </Form.Item>
         </Col>
         <Col span={6}>
@@ -467,6 +477,17 @@ function ToolsSection({ appId }: { appId: string }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tools", appId] }),
   });
 
+  // sql_db 表结构手动刷新（保存时服务端也会自动拉一次）
+  const introspect = useMutation({
+    mutationFn: (id: string) => api.post(`/api/v1/apps/${appId}/tools/${id}/introspect`, {}),
+    onSuccess: (t: any) => {
+      qc.invalidateQueries({ queryKey: ["tools", appId] });
+      const n = t?.config?.schema?.tables?.length ?? 0;
+      message.success(`表结构已更新（${n} 张表）`);
+    },
+    onError: (e: any) => message.error(e.message),
+  });
+
   const openForm = (tool?: any) => {
     form.resetFields();
     if (tool) {
@@ -499,6 +520,18 @@ function ToolsSection({ appId }: { appId: string }) {
           },
           { title: "说明", dataIndex: "description", ellipsis: true },
           {
+            title: "表结构",
+            width: 90,
+            render: (_, r) =>
+              r.type === "sql_db" ? (
+                r.config?.schema?.tables?.length ? (
+                  <Tag color="blue">{r.config.schema.tables.length} 表</Tag>
+                ) : (
+                  <Tag>未拉取</Tag>
+                )
+              ) : null,
+          },
+          {
             title: "状态",
             dataIndex: "enabled",
             width: 70,
@@ -506,12 +539,22 @@ function ToolsSection({ appId }: { appId: string }) {
           },
           {
             title: "",
-            width: 120,
+            width: 170,
             render: (_, r) => (
               <Space>
                 <Button size="small" onClick={() => openForm(r)}>
                   编辑
                 </Button>
+                {r.type === "sql_db" && (
+                  <Button
+                    size="small"
+                    loading={introspect.isPending && introspect.variables === r.id}
+                    onClick={() => introspect.mutate(r.id)}
+                    title="重新拉取数据库表结构"
+                  >
+                    拉表结构
+                  </Button>
+                )}
                 <Popconfirm title="删除该工具？" onConfirm={() => remove.mutate(r.id)}>
                   <Button size="small" danger type="text">
                     删
@@ -578,6 +621,7 @@ function ToolsSection({ appId }: { appId: string }) {
                   name={["config", "dsn"]}
                   label="数据库连接串（仅 SELECT 权限账号）"
                   rules={[{ required: true }]}
+                  extra={<span style={{ fontSize: 12 }}>保存时自动拉取表结构供 LLM 生成 SQL；表结构变化后点列表里的「拉表结构」刷新。</span>}
                 >
                   <Input placeholder="mysql+pymysql://readonly:pwd@host:3306/db" />
                 </Form.Item>
@@ -681,7 +725,7 @@ export default function Apps() {
     const detail = await api.get<AppRow>(`/api/v1/apps/${app.id}`);
     setEditing(detail);
     // 旧数据可能缺某个检索参数：与默认值合并，避免表单显示空、保存时丢字段
-    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, intent_route: true, use_bm25: true, rerank: "none", ...(detail.retrieval_config || {}) };
+    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", ...(detail.retrieval_config || {}) };
     form.setFieldsValue({
       ...detail,
       retrieval_config: rc,

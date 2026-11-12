@@ -14,6 +14,11 @@ from app.models.app import Tool
 
 MAX_RESULT_CHARS = 4000
 SQL_ROW_LIMIT = 20
+# sql_db 表结构内联阈值：不超过则直接拼进工具描述（零额外轮次）；
+# 超过则描述只放表名清单，列结构经伴随工具 <name>_tables 按需拉取（先选表再写 SQL）
+SCHEMA_INLINE_LIMIT = 1200
+MAX_INTROSPECT_TABLES = 100
+MAX_INTROSPECT_COLUMNS = 40
 
 
 class ToolError(Exception):
@@ -47,12 +52,121 @@ def to_openai_tools(tools: list[Tool]) -> list[dict]:
                 "type": "function",
                 "function": {
                     "name": slugify(t.name),
-                    "description": t.description or t.display_name or t.name,
+                    "description": sql_tool_description(t)
+                    if t.type == "sql_db"
+                    else t.description or t.display_name or t.name,
                     "parameters": params,
                 },
             }
         )
     return out
+
+
+# ---------- NL2SQL：schema 内省 / 表路由 / 伴随工具 ----------
+
+
+def introspect_schema(dsn: str) -> dict:
+    """连接数据库拉表结构（sqlalchemy inspect，跨方言：PG/MySQL/SQLite）。
+
+    返回 {"tables": [{"name", "columns": [{"name", "type"}]}]}，超出上限截断。
+    同步函数：由调用方放到线程池或自行权衡（工具执行器同样内联同步）。
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.inspection import inspect as sa_inspect
+
+    engine = create_engine(dsn, pool_pre_ping=True)
+    try:
+        insp = sa_inspect(engine)
+        names = insp.get_table_names()[:MAX_INTROSPECT_TABLES]
+        tables = []
+        for n in names:
+            cols = insp.get_columns(n)[:MAX_INTROSPECT_COLUMNS]
+            tables.append(
+                {
+                    "name": n,
+                    "columns": [
+                        {"name": c["name"], "type": str(c["type"]).split(" ")[0]}
+                        for c in cols
+                    ],
+                }
+            )
+        return {"tables": tables}
+    finally:
+        engine.dispose()
+
+
+def render_schema_text(tool: Tool, only_tables: list[str] | None = None) -> str:
+    """把 config.schema 渲染成紧凑文本：table(col type, col type, ...)。"""
+    schema = (tool.config or {}).get("schema") or {}
+    tables = schema.get("tables") or []
+    if only_tables:
+        wanted = {str(t).strip().lower() for t in only_tables if str(t).strip()}
+        tables = [t for t in tables if str(t.get("name", "")).lower() in wanted]
+    lines = []
+    for t in tables:
+        cols = ", ".join(
+            f"{c['name']} {c['type']}" for c in (t.get("columns") or [])
+        )
+        lines.append(f"{t['name']}({cols})" if cols else f"{t['name']}")
+    return "\n".join(lines)
+
+
+def sql_tool_description(tool: Tool) -> str:
+    """sql_db 工具描述 = 用途 + 表结构。小库直接内联；大库改表路由（伴随工具按需拉列）。"""
+    desc = tool.description or tool.display_name or tool.name
+    schema = (tool.config or {}).get("schema") or {}
+    tables = schema.get("tables") or []
+    if not tables:
+        return desc
+    text = render_schema_text(tool)
+    if not text:
+        return desc
+    if len(text) <= SCHEMA_INLINE_LIMIT:
+        return desc + "\n\n可用数据表（表名(字段 类型)）：\n" + text
+    names = "、".join(str(t.get("name")) for t in tables)
+    companion = slugify(tool.name) + "_tables"
+    return (
+        desc
+        + f"\n\n数据库包含 {len(tables)} 张表：{names}。"
+        + f"写 SQL 前必须先调用 {companion} 工具获取相关表的字段结构"
+        + "（参数 tables 传表名数组；不传返回全部表概览），不要凭空猜测字段名。"
+    )
+
+
+def sql_schema_companion(tool: Tool) -> dict | None:
+    """大 schema 的 sql_db 工具自动合成伴随工具 <name>_tables（非 DB 行，合成 spec）。"""
+    schema = (tool.config or {}).get("schema") or {}
+    tables = schema.get("tables") or []
+    if not tables or len(render_schema_text(tool)) <= SCHEMA_INLINE_LIMIT:
+        return None
+    return {
+        "type": "function",
+        "function": {
+            "name": slugify(tool.name) + "_tables",
+            "description": (
+                f"查询 {tool.name} 数据库的表结构。参数 tables 为表名数组（可选）："
+                "传表名返回这些表的字段；不传返回全部表概览。写 SQL 前先调用本工具。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tables": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要查看字段结构的表名（可选）",
+                    }
+                },
+            },
+        },
+    }
+
+
+def execute_sql_schema_tool(tool: Tool, args: dict) -> str:
+    """伴随工具执行：按需返回表结构文本（只读内存数据，不连库）。"""
+    text = render_schema_text(tool, args.get("tables"))
+    if not text:
+        return "未找到匹配的表。可先不带参数调用本工具获取全部表清单。"
+    return "数据库表结构：\n" + text
 
 
 def default_parameters_schema(tool: Tool) -> dict:

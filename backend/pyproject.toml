@@ -26,6 +26,12 @@ dependencies = [
     "PyJWT>=2.8",
     "jieba>=0.42",
     "cryptography>=42.0",
+    # sql_db 工具的同步驱动（introspect/execute 用 sync engine）：
+    # SQLAlchemy 2.1 起 postgresql:// 默认走 psycopg(v3)，psycopg2 兼容显式 postgresql+psycopg2:// 写法；
+    # MySQL 需 pymysql；SQLite 内置无需安装
+    "psycopg[binary]>=3.2",
+    "psycopg2-binary>=2.9",
+    "pymysql>=1.1",
 ]
 
 [project.optional-dependencies]

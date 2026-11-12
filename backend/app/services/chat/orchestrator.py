@@ -20,13 +20,16 @@ from app.services.llm import get_llm_client
 from app.services.retrieval import get_app_knowledge_bases, retrieve
 from app.services.tools import (
     ToolError,
+    execute_sql_schema_tool,
     execute_tool,
     get_app_tools,
     slugify,
+    sql_schema_companion,
     to_openai_tools,
 )
 
 TOOL_MAX_ROUNDS = 2
+TOOL_ROUNDS_LIMIT = (1, 6)
 
 # ---------- Prompt（规则层放 system；参考资料/问题等输入放 user，见 §消息分层最佳实践） ----------
 
@@ -179,7 +182,7 @@ async def _classify_intent(llm, question: str) -> str:
 
 async def _run_with_tools(
     llm, messages: list[dict], tools, temperature: float, max_tokens: int,
-    ctx: dict | None = None,
+    ctx: dict | None = None, max_rounds: int = TOOL_MAX_ROUNDS,
 ) -> AsyncGenerator[dict]:
     """function calling 循环（非流式多轮）。
 
@@ -187,14 +190,24 @@ async def _run_with_tools(
     工具执行失败不中断，错误文本回喂 LLM 令其向用户说明。
     ctx 是业务参数上下文（end_user/metadata），仅服务端注入工具请求，
     不进 Prompt——LLM 决定调用与参数，身份鉴权由业务 API 依据注入凭据完成。
+    max_rounds 由应用级配置 retrieval_config.tool_rounds 注入（钳 1..6）。
     """
     openai_tools = to_openai_tools(tools)
     tool_map = {slugify(t.name): t for t in tools}
+    # 大 schema 的 sql_db 工具自动挂伴随工具 <name>_tables（表结构按需拉取，先选表再写 SQL）
+    companion_map: dict[str, object] = {}
+    for t in tools:
+        if t.type == "sql_db":
+            spec = sql_schema_companion(t)
+            if spec:
+                name = spec["function"]["name"]
+                openai_tools.append(spec)
+                companion_map[name] = t
     msgs = list(messages)
     total = {"tokens_in": 0, "tokens_out": 0}
 
-    for round_no in range(TOOL_MAX_ROUNDS + 1):
-        last_round = round_no == TOOL_MAX_ROUNDS  # 最后一轮强制直接作答
+    for round_no in range(max_rounds + 1):
+        last_round = round_no == max_rounds  # 最后一轮强制直接作答
         content, tool_calls, u = await llm.chat_with_tools(
             msgs,
             [] if last_round else openai_tools,
@@ -232,10 +245,14 @@ async def _run_with_tools(
             yield {"type": "tool_call", "name": tc["name"], "args": args}
             tool = tool_map.get(tc["name"])
             try:
-                if tool is None:
+                if tc["name"] in companion_map:
+                    result = execute_sql_schema_tool(companion_map[tc["name"]], args)
+                    ok = True
+                elif tool is None:
                     raise ToolError(f"未知工具 {tc['name']}")
-                result = execute_tool(tool, args, ctx)
-                ok = True
+                else:
+                    result = execute_tool(tool, args, ctx)
+                    ok = True
             except ToolError as e:
                 result, ok = f"工具执行失败: {e}", False
             except Exception as e:  # noqa: BLE001
@@ -308,9 +325,31 @@ async def run_chat(
     tools = await get_app_tools(session, app.id)
     tool_ctx = {"end_user": end_user or {}, "metadata": metadata or {}}
 
-    if tools:
+    # 工具循环轮数：应用级配置（默认 2，钳 1..6）
+    lo, hi = TOOL_ROUNDS_LIMIT
+    tool_rounds = max(lo, min(int(config.get("tool_rounds") or TOOL_MAX_ROUNDS), hi))
+
+    # 多 agent 模式（架构先行，默认 single 走原有单 agent 路径，零行为变化）：
+    # agent_config = {"mode": "planner_workers", "workers": [{name, system_prompt, tool_names, max_rounds}]}
+    agent_cfg = config.get("agent_config") or {}
+    if agent_cfg.get("mode") == "planner_workers" and tools:
+        from app.services.agents import planner_workers
+
+        async for event in planner_workers(
+            llm, messages, tools, question, agent_cfg,
+            temperature=temperature, max_tokens=max_tokens, ctx=tool_ctx,
+        ):
+            if event["type"] == "delta":
+                answer_parts.append(event["content"])
+                yield {"type": "delta", "content": event["content"]}
+            elif event["type"] == "usage":
+                usage = event
+            else:
+                yield event
+    elif tools:
         async for event in _run_with_tools(
-            llm, messages, tools, temperature, max_tokens, ctx=tool_ctx
+            llm, messages, tools, temperature, max_tokens,
+            ctx=tool_ctx, max_rounds=tool_rounds,
         ):
             if event["type"] == "delta":
                 answer_parts.append(event["content"])

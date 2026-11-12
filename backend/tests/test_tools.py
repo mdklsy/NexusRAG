@@ -213,3 +213,53 @@ async def test_widget_config_endpoint(sqlite_env):
     assert data["title"] == "在线客服"
     assert data["theme"] == "#722ed1"
     assert data["app_name"] == "挂件应用"
+
+
+# ---------- NL2SQL：表结构内省 / 内联与伴随工具 / 表路由 ----------
+
+
+def _sql_tool(schema_tables, desc="查业务库"):
+    return Tool(
+        app_id=None,
+        name="bizdb",
+        description=desc,
+        type="sql_db",
+        config={"dsn": "sqlite:///x.db", "schema": {"tables": schema_tables}},
+        parameters_schema={},
+    )
+
+
+def test_sql_description_inlines_small_schema():
+    t = _sql_tool([
+        {"name": "orders", "columns": [{"name": "id", "type": "INTEGER"}, {"name": "status", "type": "TEXT"}]},
+    ])
+    d = to_openai_tools([t])[0]["function"]["description"]
+    assert "orders(id INTEGER, status TEXT)" in d
+    assert "_tables" not in d  # 小库不需要伴随工具
+
+
+def test_sql_large_schema_routes_via_companion():
+    big = [
+        {"name": f"table_{i}", "columns": [{"name": f"col_{j}", "type": "TEXT"} for j in range(20)]}
+        for i in range(12)
+    ]
+    t = _sql_tool(big)
+    fn = to_openai_tools([t])[0]["function"]
+    assert "写 SQL 前必须先调用 bizdb_tables" in fn["description"]
+    assert "col_0" not in fn["description"]  # 大库描述不带列结构
+    from app.services.tools import sql_schema_companion
+
+    spec = sql_schema_companion(t)
+    assert spec is not None and spec["function"]["name"] == "bizdb_tables"
+
+
+def test_sql_schema_tool_filters_tables():
+    t = _sql_tool([
+        {"name": "orders", "columns": [{"name": "id", "type": "INTEGER"}]},
+        {"name": "users", "columns": [{"name": "uid", "type": "TEXT"}]},
+    ])
+    from app.services.tools import execute_sql_schema_tool
+
+    out = execute_sql_schema_tool(t, {"tables": ["users"]})
+    assert "users(uid TEXT)" in out and "orders" not in out
+    assert "未找到匹配的表" in execute_sql_schema_tool(t, {"tables": ["nope"]})
