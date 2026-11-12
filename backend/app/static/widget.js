@@ -564,10 +564,22 @@
       function (ev) {
         if (ev.type === "conversation") {
           state.conversationId = ev.conversation_id;
+        } else if (ev.type === "plan") {
+          var subs = ev.subtasks || [];
+          if (subs.length) {
+            toolLines.push("📋 规划 " + subs.length + " 个子任务：" +
+              subs.map(function (s) { return (s.worker || "") + "·" + (s.title || ""); }).join("、"));
+          }
+        } else if (ev.type === "agent_start") {
+          toolLines.push("🤖 " + ev.agent + " 接手：" + (ev.task || "") + "…");
+        } else if (ev.type === "agent_done") {
+          toolLines.push("✅ " + ev.agent + " 完成");
         } else if (ev.type === "tool_call") {
-          toolLines.push("⚙ 调用 " + ev.name + "…");
+          var tag = ev.agent ? "[" + ev.agent + "] " : "";
+          toolLines.push(tag + "⚙ 调用 " + ev.name + "…");
         } else if (ev.type === "tool_result") {
-          toolLines.push((ev.ok ? "✓ " : "✗ ") + ev.name + " 完成");
+          var tag2 = ev.agent ? "[" + ev.agent + "] " : "";
+          toolLines.push(tag2 + (ev.ok ? "✓ " : "✗ ") + ev.name + " 完成");
         } else if (ev.type === "delta") {
           if (!bubbleEl) {
             typing.remove();

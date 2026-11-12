@@ -40,17 +40,27 @@ SYNTH_SYSTEM_SUFFIX = """
 最终回答遵守系统提示词的全部规则（引用、格式、语言）。"""
 
 
-def _build_specs(config: dict) -> dict[str, AgentSpec]:
+def _build_specs(config: dict, tools: list) -> dict[str, AgentSpec]:
+    """构建 worker spec；工具白名单与实际注册工具做交集校验，
+    配置写错（如工具改名/删除）时记入 missing_tools，避免静默变成无工具代理。"""
+    valid = {slugify(t.name) for t in tools}
     specs: dict[str, AgentSpec] = {}
     for w in config.get("workers") or []:
         name = str(w.get("name") or "").strip()
         if not name:
             continue
+        names = w.get("tool_names") if isinstance(w.get("tool_names"), list) else None
+        missing: list[str] = []
+        if names is not None:
+            wanted = [n for n in names if slugify(n)]
+            missing = [n for n in wanted if slugify(n) not in valid]
+            names = [n for n in wanted if slugify(n) in valid]
         specs[name] = AgentSpec(
             name=name,
             system_prompt=str(w.get("system_prompt") or ""),
-            tool_names=w.get("tool_names") if isinstance(w.get("tool_names"), list) else None,
+            tool_names=names,
             max_rounds=max(1, min(int(w.get("max_rounds") or 2), 6)),
+            missing_tools=missing,
         )
     return specs
 
@@ -66,7 +76,7 @@ async def planner_workers(
     ctx: dict | None = None,
 ) -> AsyncGenerator[dict]:
     """规划 → 顺序分发 → 汇总。事件协议见 runner 模块注释。"""
-    workers = _build_specs(config)
+    workers = _build_specs(config, tools)
     if not workers:
         yield {"type": "delta", "content": "⚠️ agent_config.workers 未配置，无法启用多代理模式。"}
         yield {"type": "usage", "tokens_in": 0, "tokens_out": 0}
@@ -77,11 +87,14 @@ async def planner_workers(
     # 1. 规划
     roster = "\n".join(
         f"- {s.name}：{s.system_prompt.splitlines()[0] if s.system_prompt else '（无描述）'}"
-        f"（可用工具：{'全部' if s.tool_names is None else '、'.join(s.tool_names)}）"
+        f"（可用工具：{'全部' if s.tool_names is None else ('、'.join(s.tool_names) if s.tool_names else '无')}"
+        + (f"；⚠️ 配置的工具未找到：{'、'.join(s.missing_tools)}，该代理无法查数据，不要给它派需要调接口的任务" if s.missing_tools else "")
+        + "）"
         for s in workers.values()
     )
+    # chat_json 收消息列表（内部取 messages[-1] 追加 JSON 约束），不能传裸字符串
     plan_raw = await llm.chat_json(
-        PLAN_PROMPT.format(agents=roster, max_subtasks=max_subtasks, question=question),
+        [{"role": "user", "content": PLAN_PROMPT.format(agents=roster, max_subtasks=max_subtasks, question=question)}],
         temperature=0.0,
     )
     try:

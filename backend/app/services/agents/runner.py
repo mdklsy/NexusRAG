@@ -26,6 +26,8 @@ class AgentSpec:
     tool_names: list[str] | None = None
     max_rounds: int = 2
     delegates: "dict[str, AgentSpec]" = field(default_factory=dict)
+    # 配置里写了但应用里不存在的工具名（构建 spec 时校验记下，供规划名单标注）
+    missing_tools: list[str] = field(default_factory=list)
 
 
 def _filter_tools(spec: AgentSpec, tools: list) -> list:
