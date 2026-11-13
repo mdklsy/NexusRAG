@@ -47,6 +47,7 @@ async def run_agent(
     max_tokens: int = 2048,
     agent_label: str | None = None,
     depth: int = 0,
+    approval=None,
 ) -> AsyncGenerator[dict]:
     """执行一个 agent：function calling 循环 + 可选子 agent 委派。
 
@@ -158,10 +159,23 @@ async def run_agent(
             else:
                 tool = tool_map.get(tc["name"])
                 try:
-                    if tool is None:
-                        raise ToolError(f"未知工具 {tc['name']}")
-                    result = execute_tool(tool, args, ctx)
-                    ok = True
+                    # 审批门：require_approval 工具拦截真执行，落审批单（形态①）
+                    if approval is not None and tool is not None:
+                        action_id = await approval.intercept(tool, args)
+                        if action_id is not None:
+                            yield {"type": "approval_request", "action_id": action_id,
+                                   "tool": tool.name, "args": args, "agent": label}
+                            result = (
+                                f"该工具调用需要人工审批（审批单#{action_id}），本轮未执行。"
+                                "请基于已有信息作答，不要重复调用该工具。"
+                            )
+                            ok = True
+                            tool = None  # 跳过下方真执行
+                    if tool is not None:
+                        if tool is None:
+                            raise ToolError(f"未知工具 {tc['name']}")
+                        result = execute_tool(tool, args, ctx)
+                        ok = True
                 except ToolError as e:
                     result, ok = f"工具执行失败: {e}", False
                 except Exception as e:  # noqa: BLE001

@@ -346,6 +346,7 @@ class MessageOut(ORMModel):
     tokens_out: int
     latency_ms: int
     created_at: datetime
+    review_status: str = "published"
 
 
 # ---------- Dashboard ----------

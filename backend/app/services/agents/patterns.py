@@ -115,7 +115,7 @@ def _compute_waves(subtasks: list[dict], deps: list[set[int]]) -> list[list[int]
 async def _run_subtask(
     i: int, st: dict, spec: AgentSpec, llm, tools, ctx,
     temperature: float, max_tokens: int, queue: asyncio.Queue, wave: int,
-    sem: asyncio.Semaphore, outputs: list, usages: list,
+    sem: asyncio.Semaphore, outputs: list, usages: list, approval=None,
 ) -> None:
     """并行路径执行单个子任务：事件入队，产出写回 outputs[i]/usages[i]。
 
@@ -134,7 +134,7 @@ async def _run_subtask(
             ]
             async for ev in run_agent(
                 llm, spec, wmsgs, tools, ctx=ctx,
-                temperature=temperature, max_tokens=max_tokens,
+                temperature=temperature, max_tokens=max_tokens, approval=approval,
             ):
                 if ev["type"] == "delta":
                     out += ev["content"]
@@ -166,6 +166,7 @@ async def planner_workers(
     temperature: float = 0.3,
     max_tokens: int = 2048,
     ctx: dict | None = None,
+    approval=None,
 ) -> AsyncGenerator[dict]:
     """规划 → （按依赖波次并行）分发 → 汇总。事件协议见 runner 模块注释。"""
     workers = _build_specs(config, tools)
@@ -218,7 +219,7 @@ async def planner_workers(
                 asyncio.create_task(
                     _run_subtask(i, subtasks[i], workers[subtasks[i]["worker"]],
                                  llm, tools, ctx, temperature, max_tokens,
-                                 queue, wave_no, sem, outputs, usages)
+                                 queue, wave_no, sem, outputs, usages, approval)
                 )
                 for i in wave
             ]
@@ -242,7 +243,7 @@ async def planner_workers(
                     {"role": "system", "content": spec.system_prompt},
                     {"role": "user", "content": str(st.get("instruction") or st.get("title") or "")},
                 ],
-                tools, ctx=ctx, temperature=temperature, max_tokens=max_tokens,
+                tools, ctx=ctx, temperature=temperature, max_tokens=max_tokens, approval=approval,
             ):
                 if ev["type"] == "delta":
                     out += ev["content"]

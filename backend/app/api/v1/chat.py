@@ -247,6 +247,8 @@ async def widget_messages(
             tuple_(Message.created_at, Message.id)
             < tuple_(cursor.created_at, cursor.id)
         )
+    # 挂件侧只看已发布的回答：待审核（pending）与被驳回（rejected）的消息隐藏
+    filters.append(Message.review_status == "published")
     rows = (
         (
             await session.execute(

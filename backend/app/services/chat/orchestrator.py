@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.app import App, Conversation, Message, UsageEvent
 from app.services.llm import get_llm_client
+from app.services.approvals import ApprovalGate
 from app.services.retrieval import get_app_knowledge_bases, retrieve
 from app.services.tools import (
     ToolError,
@@ -46,6 +47,7 @@ QA_RULES_TEMPLATE = """{app_prompt}
 1. 只依据【参考资料】与【知识图谱事实】陈述；不要用你的预训练知识补全细节，不要编造政策、数字、时间、流程
 2. 资料不足以支持结论时，如实告知用户没有相关资料；若资料有相关内容但缺少关键信息，可先提出 1~2 个澄清问题
 3. 资料之间存在冲突时，优先采用更新时间更近的；仍无法判断则说明冲突点，分别给出不同说法及其引用编号
+4. 用户问题缺少调用业务工具的必要参数（如订单号、任务 ID、手机号）时，先向用户询问参数值，拿到后再调用；不要编造参数或调用注定失败的工具
 
 # 引用规则（可验收标准）
 1. 每条关键事实后紧跟引用编号，如 [1][2]；引用紧跟句子，不要集中列在结尾
@@ -183,14 +185,16 @@ async def _classify_intent(llm, question: str) -> str:
 async def _run_with_tools(
     llm, messages: list[dict], tools, temperature: float, max_tokens: int,
     ctx: dict | None = None, max_rounds: int = TOOL_MAX_ROUNDS,
+    approval: "ApprovalGate | None" = None,
 ) -> AsyncGenerator[dict]:
     """function calling 循环（非流式多轮）。
 
-    产出事件：tool_call / tool_result / delta（最终答案整段）/ usage。
+    产出事件：tool_call / tool_result / approval_request / delta（最终答案整段）/ usage。
     工具执行失败不中断，错误文本回喂 LLM 令其向用户说明。
     ctx 是业务参数上下文（end_user/metadata），仅服务端注入工具请求，
     不进 Prompt——LLM 决定调用与参数，身份鉴权由业务 API 依据注入凭据完成。
     max_rounds 由应用级配置 retrieval_config.tool_rounds 注入（钳 1..6）。
+    approval 是人工审批门（形态①）：require_approval 工具调用被拦截落审批单。
     """
     openai_tools = to_openai_tools(tools)
     tool_map = {slugify(t.name): t for t in tools}
@@ -245,6 +249,27 @@ async def _run_with_tools(
             yield {"type": "tool_call", "name": tc["name"], "args": args}
             tool = tool_map.get(tc["name"])
             try:
+                # 审批门：require_approval 工具拦截真执行，落审批单等人拍板（形态①）
+                if approval is not None and tool is not None and tc["name"] not in companion_map:
+                    action_id = await approval.intercept(tool, args)
+                    if action_id is not None:
+                        yield {
+                            "type": "approval_request",
+                            "action_id": action_id,
+                            "tool": tool.name,
+                            "args": args,
+                        }
+                        result = (
+                            f"该工具调用需要人工审批（审批单#{action_id}），本轮未执行。"
+                            "请告知用户：已提交人工审批，审批完成后结果会出现在对话里；"
+                            "本轮请基于已有信息先作答，不要重复调用该工具。"
+                        )
+                        ok = True
+                        yield {"type": "tool_result", "name": tc["name"], "ok": True, "preview": result[:200], "approved_pending": True}
+                        msgs.append(
+                            {"role": "tool", "tool_call_id": tc["id"], "content": result[:4000]}
+                        )
+                        continue
                 if tc["name"] in companion_map:
                     result = execute_sql_schema_tool(companion_map[tc["name"]], args)
                     ok = True
@@ -325,6 +350,11 @@ async def run_chat(
     tools = await get_app_tools(session, app.id)
     tool_ctx = {"end_user": end_user or {}, "metadata": metadata or {}}
 
+    # 人工审批门：工具配置 require_approval=true 时拦截真执行，落审批单人拍板（形态①）
+    approval = ApprovalGate(session, app.id, conversation_id, tool_ctx)
+    # 人工审核模式（形态④）：回答缓冲不直接下发，落 pending 消息等人在控制台放行
+    review_mode = (config or {}).get("review_mode") == "on"
+
     # 工具循环轮数：应用级配置（默认 2，钳 1..6）
     lo, hi = TOOL_ROUNDS_LIMIT
     tool_rounds = max(lo, min(int(config.get("tool_rounds") or TOOL_MAX_ROUNDS), hi))
@@ -338,22 +368,27 @@ async def run_chat(
         async for event in planner_workers(
             llm, messages, tools, question, agent_cfg,
             temperature=temperature, max_tokens=max_tokens, ctx=tool_ctx,
+            approval=approval,
         ):
             if event["type"] == "delta":
                 answer_parts.append(event["content"])
-                yield {"type": "delta", "content": event["content"]}
+                if not review_mode:
+                    yield {"type": "delta", "content": event["content"]}
             elif event["type"] == "usage":
                 usage = event
+            elif review_mode and event["type"] in ("tool_call", "tool_result"):
+                continue  # 审核模式下过程事件同样不下发（反正回答都要憋着）
             else:
                 yield event
     elif tools:
         async for event in _run_with_tools(
             llm, messages, tools, temperature, max_tokens,
-            ctx=tool_ctx, max_rounds=tool_rounds,
+            ctx=tool_ctx, max_rounds=tool_rounds, approval=approval,
         ):
             if event["type"] == "delta":
                 answer_parts.append(event["content"])
-                yield {"type": "delta", "content": event["content"]}
+                if not review_mode:
+                    yield {"type": "delta", "content": event["content"]}
             elif event["type"] == "usage":
                 usage = event  # 事件本身即 {type, tokens_in, tokens_out}
             else:
@@ -364,17 +399,13 @@ async def run_chat(
         ):
             if delta:
                 answer_parts.append(delta)
-                yield {"type": "delta", "content": delta}
+                if not review_mode:
+                    yield {"type": "delta", "content": delta}
             if u:
                 usage = u
     answer = "".join(answer_parts)
 
-    if citations:
-        yield {"type": "citations", "citations": citations}
-    if usage:
-        yield {"type": "usage", **usage}
-
-    # 4. 落库：消息 + 用量事件
+    # 4. 落库：消息 + 用量事件（审核模式下回答落 pending，通过后才对终端用户可见）
     latency_ms = int((time.monotonic() - start) * 1000)
     conversation = await session.get(Conversation, conversation_id)
     # 同一事务里 created_at 相同（PG now() 取事务时间），显式错开 1µs
@@ -388,18 +419,19 @@ async def run_chat(
             created_at=base_ts,
         )
     )
-    session.add(
-        Message(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=answer,
-            citations=citations,
-            tokens_in=usage.get("tokens_in", 0),
-            tokens_out=usage.get("tokens_out", 0),
-            latency_ms=latency_ms,
-            created_at=base_ts + timedelta(microseconds=1),
-        )
+    assistant_msg = Message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=answer,
+        citations=citations,
+        tokens_in=usage.get("tokens_in", 0),
+        tokens_out=usage.get("tokens_out", 0),
+        latency_ms=latency_ms,
+        created_at=base_ts + timedelta(microseconds=1),
     )
+    if review_mode and answer.strip():
+        assistant_msg.review_status = "pending"
+    session.add(assistant_msg)
     session.add(
         UsageEvent(
             app_id=app.id,
@@ -414,8 +446,17 @@ async def run_chat(
         conversation.title = question[:100]
     await session.commit()
 
+    # 审核模式：回答已落 pending，通知审核侧；引用随消息一起等放行后再可见
+    if assistant_msg.review_status == "pending":
+        yield {"type": "review_pending", "message_id": str(assistant_msg.id)}
+        yield {"type": "delta", "content": "\n\n⚠️ 回答已生成，等待人工审核后发布。"}
+    elif citations:
+        yield {"type": "citations", "citations": citations}
+    if usage:
+        yield {"type": "usage", **usage}
+
     yield {
         "type": "done",
         "latency_ms": latency_ms,
-        "message_id": "",
+        "message_id": str(assistant_msg.id),
     }

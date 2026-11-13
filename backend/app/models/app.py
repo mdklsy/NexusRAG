@@ -128,6 +128,35 @@ class Message(TimestampMixin, Base):
     tokens_in: Mapped[int] = mapped_column(Integer, default=0)
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    # 人工审核状态：published=已发布（默认）| pending=待审核（挂件不可见）| rejected=被驳回（挂件不可见）
+    review_status: Mapped[str] = mapped_column(String(20), default="published", server_default="published", index=True)
+
+
+class PendingAction(TimestampMixin, Base):
+    """工具调用人工审批单：代理要调敏感工具时先落单，人通过后才真执行。"""
+
+    __tablename__ = "pending_actions"
+    __table_args__ = (Index("ix_pending_actions_status", "app_id", "status"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("apps.id", ondelete="CASCADE"), index=True
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    tool_name: Mapped[str] = mapped_column(String(120))
+    args: Mapped[dict] = mapped_column(JSONType, default=dict)
+    # 审批续跑所需的业务上下文快照（end_user/metadata）——metadata 不落会话，只能这里快照
+    ctx_snapshot: Mapped[dict] = mapped_column(JSONType, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|approved|rejected
+    result_text: Mapped[str | None] = mapped_column(Text, default=None)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class UsageEvent(Base):

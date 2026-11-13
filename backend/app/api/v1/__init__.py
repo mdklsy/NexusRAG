@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    approvals,
     apps,
     auth,
     chat,
@@ -24,6 +25,7 @@ api_router.include_router(settings.router)
 api_router.include_router(kbs.router)
 api_router.include_router(documents.router)
 api_router.include_router(apps.router)
+api_router.include_router(approvals.router)
 api_router.include_router(tools.router)
 api_router.include_router(users.router)
 api_router.include_router(widget.router)

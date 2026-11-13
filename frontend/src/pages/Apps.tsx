@@ -118,6 +118,25 @@ function ConfigForm({
     value: t.name,
     label: `${t.name}（${t.type === "http_api" ? "HTTP" : "SQL"}）`,
   }));
+  // 人机协作：待审批工具调用 + 待审核回答（仅编辑已有应用时拉取）
+  const qc = useQueryClient();
+  const { data: approvals } = useQuery({
+    queryKey: ["approvals", editingId],
+    queryFn: () => api.get<any[]>(`/api/v1/apps/${editingId}/approvals?status=pending`),
+    enabled: !!editingId,
+    refetchInterval: 15000,
+  });
+  const { data: reviews } = useQuery({
+    queryKey: ["reviews", editingId],
+    queryFn: () => api.get<any[]>(`/api/v1/apps/${editingId}/reviews`),
+    enabled: !!editingId,
+    refetchInterval: 15000,
+  });
+  const decideApproval = useMutation({
+    mutationFn: (v: { id: string; approved: boolean }) =>
+      api.post(`/api/v1/apps/${editingId}/approvals/${v.id}/decide`, { approved: v.approved }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["approvals", editingId] }),
+  });
   return (
     <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", model: "", agent_ui: { mode: "single", max_subtasks: 3, workers: [], parallel: true, max_concurrency: 4 } }}>
       <Tabs
@@ -488,6 +507,83 @@ function ConfigForm({
       )}
         </>
       ) },
+          ...(editingId
+            ? [{
+                key: "hitl", label: "人机协作", forceRender: true, children: (
+        <>
+      <Typography.Title level={5} style={{ marginBottom: 4 }}>
+        人机协作（审批 + 审核）
+      </Typography.Title>
+      <Form.Item
+        name={["retrieval_config", "review_mode"]}
+        label="回答人工审核"
+        tooltip="开启后：每轮回答不再直接发给用户，而是进入下方「待审核回答」，你通过（可改写）后用户才可见。适合对答出内容负责的场景（客服对外话术等）。"
+        extra={<span style={{ fontSize: 12 }}>默认关；挂件用户在审核期间看到“回答已生成，等待人工审核”</span>}
+      >
+        <Select
+          allowClear
+          placeholder="关闭（默认）"
+          options={[
+            { value: "on", label: "开启：全部回答先审后发" },
+          ]}
+        />
+      </Form.Item>
+      <Typography.Text strong>待审批工具调用</Typography.Text>
+      <Table
+        rowKey="id"
+        size="small"
+        style={{ marginBottom: 16 }}
+        dataSource={approvals || []}
+        pagination={false}
+        locale={{ emptyText: "没有待审批的工具调用。给敏感工具开启「调用前需人工确认」后，代理调用会先落到这里。" }}
+        columns={[
+          { title: "工具", dataIndex: "tool_name", width: 130 },
+          { title: "参数", dataIndex: "args", ellipsis: true, render: (v) => <code style={{ fontSize: 12 }}>{JSON.stringify(v)}</code> },
+          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
+          {
+            title: "",
+            width: 130,
+            render: (_, r) => (
+              <Space>
+                <Button size="small" type="primary" loading={decideApproval.isPending && decideApproval.variables?.id === r.id}
+                        onClick={() => decideApproval.mutate({ id: r.id, approved: true })}>
+                  通过执行
+                </Button>
+                <Popconfirm title="拒绝执行该调用？" onConfirm={() => decideApproval.mutate({ id: r.id, approved: false })}>
+                  <Button size="small" danger>拒绝</Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+      />
+      <Typography.Text strong>待审核回答</Typography.Text>
+      <Table
+        rowKey="message_id"
+        size="small"
+        dataSource={reviews || []}
+        pagination={false}
+        locale={{ emptyText: "没有待审核的回答。开启「回答人工审核」后，每轮回答会先落到这里等你放行。" }}
+        expandable={{
+          defaultExpandAllRows: false,
+          expandedRowRender: (r: any) => (
+            <ReviewEditRow
+              row={r}
+              appId={editingId!}
+              onDone={() => qc.invalidateQueries({ queryKey: ["reviews", editingId] })}
+            />
+          ),
+          rowExpandable: () => true,
+        }}
+        columns={[
+          { title: "会话", dataIndex: "conversation_title", width: 160, ellipsis: true },
+          { title: "待发回答（展开可改写）", dataIndex: "content", ellipsis: true },
+          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
+        ]}
+      />
+        </>
+      ) },
+            ] : []),
           { key: "widget", label: "网页挂件", forceRender: true, children: (
         <>
       <Typography.Title level={5} style={{ marginBottom: 4 }}>
@@ -579,6 +675,45 @@ function ConfigForm({
         ]}
       />
     </Form>
+  );
+}
+
+/** 待审核回答的行内审核：通过原文 / 改写后通过 / 驳回（编辑抽屉「人机协作」页签用） */
+function ReviewEditRow({ row, appId, onDone }: { row: any; appId: string; onDone: () => void }) {
+  const [text, setText] = useState<string>(row.content || "");
+  const decide = useMutation({
+    mutationFn: (v: { action: string; content?: string }) =>
+      api.post(`/api/v1/apps/${appId}/reviews/${row.message_id}/decide`, v),
+    onSuccess: () => {
+      message.success("已处理");
+      onDone();
+    },
+    onError: (e: any) => message.error(String(e?.message || e)),
+  });
+  const changed = text !== (row.content || "");
+  return (
+    <div>
+      <Input.TextArea
+        rows={4}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        style={{ marginBottom: 8 }}
+      />
+      <Space>
+        <Button
+          size="small"
+          type="primary"
+          loading={decide.isPending}
+          disabled={decide.isPending}
+          onClick={() => decide.mutate(changed ? { action: "replace", content: text } : { action: "approve" })}
+        >
+          {changed ? "改写后通过" : "通过原文"}
+        </Button>
+        <Popconfirm title="驳回后该回答对用户永久不可见，确认？" onConfirm={() => decide.mutate({ action: "reject" })}>
+          <Button size="small" danger disabled={decide.isPending}>驳回</Button>
+        </Popconfirm>
+      </Space>
+    </div>
   );
 }
 
@@ -796,9 +931,24 @@ function ToolsSection({ appId }: { appId: string }) {
               )
             }
           </Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
-            <Switch />
-          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
+                <Switch />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name={["config", "require_approval"]}
+                label="调用前需人工确认"
+                valuePropName="checked"
+                tooltip="人机协作：代理要调这个工具时不直接执行，先在「人机协作」页签生成待审批单；你通过后系统才真正执行，并把结果自动回复到原对话。适合退款、发货、发短信这类有真实后果的接口。"
+                extra={<span style={{ fontSize: 12 }}>默认关；开启后挂件用户会看到“已提交人工审批”</span>}
+              >
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
     </>
@@ -886,7 +1036,7 @@ export default function Apps() {
     // 旧数据可能缺某个检索参数：与默认值合并，避免表单显示空、保存时丢字段
     const rawRc = detail.retrieval_config || {};
     const { agent_config: agentCfg, ...rcRest } = rawRc;
-    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", ...rcRest };
+    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", review_mode: "off", ...rcRest };
     form.setFieldsValue({
       ...detail,
       retrieval_config: rc,
