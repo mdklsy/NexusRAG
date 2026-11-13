@@ -459,13 +459,19 @@ function ConfigForm({
                           {...restField}
                           name={[name, "tool_names"]}
                           label="工具白名单"
-                          tooltip="不选 = 可用全部业务工具；配置里写了但业务工具里不存在的名字会被忽略并提示规划器"
+                          tooltip="简单说：不勾 = 所有工具都能用；勾了 = 只能用勾的这几个。比如查数据的代理，就别给它订单接口的权限。勾了名字但「业务工具」页签里其实没有的，会被自动忽略。"
                         >
                           <Select mode="multiple" allowClear placeholder="全部工具" options={agentToolOptions} maxTagCount={2} />
                         </Form.Item>
                       </Col>
                       <Col span={3}>
-                        <Form.Item {...restField} name={[name, "max_rounds"]} label="轮数" initialValue={2}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, "max_rounds"]}
+                          label="轮数"
+                          initialValue={2}
+                          tooltip="这个代理回答前最多能连续查几次工具。1 = 查一次就得答；2 = 查完一次还能再查一次（比如先查统计、再查详情）。每多一轮就多一次模型调用，更慢更贵，默认 2 够用。"
+                        >
                           <InputNumber min={1} max={6} style={{ width: "100%" }} />
                         </Form.Item>
                       </Col>
