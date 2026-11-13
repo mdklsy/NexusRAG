@@ -232,3 +232,29 @@ async def test_review_mode_buffers_answer(sqlite_env, monkeypatch):
         contents = [m["content"] for m in r.json()["messages"]]
         assert any("审核后的官方回复" in c for c in contents)
         assert not any("默认回答" in c for c in contents)  # 未审核版本永不可见
+
+
+async def test_apps_list_pending_counts(sqlite_env):
+    """应用列表带出待审批/待审核数（前端角标数据源）。"""
+    from httpx import ASGITransport, AsyncClient as AC2
+
+    from app.main import app as fastapi_app
+
+    app_id, conv_id, token = await _mk_env()
+    async with session_scope() as session:
+        session.add(PendingAction(
+            app_id=app_id, conversation_id=conv_id, tool_name="refund",
+            args={"order_id": "A1"}, ctx_snapshot={},
+        ))
+        session.add(Message(
+            conversation_id=conv_id, role="assistant",
+            content="待审核草稿", review_status="pending",
+        ))
+        await session.commit()
+
+    async with AC2(transport=ASGITransport(app=fastapi_app), base_url="http://t") as client:
+        r = await client.get("/api/v1/apps", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        row = next(a for a in r.json() if a["id"] == str(app_id))
+        assert row["pending_approvals"] == 1
+        assert row["pending_reviews"] == 1

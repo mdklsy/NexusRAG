@@ -4,14 +4,14 @@ import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_role
 from app.core.crypto import mask_secret
 from app.core.security import generate_api_key
 from app.db.session import get_session
-from app.models.app import App, AppKnowledgeBase
+from app.models.app import App, AppKnowledgeBase, Conversation, Message, PendingAction
 from app.models.platform import ApiKey, User
 from app.schemas import ApiKeyCreated, ApiKeyOut, AppCreate, AppDetailOut, AppOut, AppUpdate
 
@@ -58,12 +58,32 @@ async def list_apps(
     kb_map: dict = {}
     for app_id, kb_id in bindings:
         kb_map.setdefault(app_id, []).append(kb_id)
+    # 人机协作待办数：待审批工具调用 + 待人工审核回答（应用列表角标用）
+    pa_rows = (
+        await session.execute(
+            select(PendingAction.app_id, func.count())
+            .where(PendingAction.status == "pending")
+            .group_by(PendingAction.app_id)
+        )
+    ).all()
+    pr_rows = (
+        await session.execute(
+            select(Conversation.app_id, func.count())
+            .join(Message, Message.conversation_id == Conversation.id)
+            .where(Message.role == "assistant", Message.review_status == "pending")
+            .group_by(Conversation.app_id)
+        )
+    ).all()
+    pa_map = {app_id: n for app_id, n in pa_rows}
+    pr_map = {app_id: n for app_id, n in pr_rows}
     out = []
     for a in apps:
         data = AppOut.model_validate(a).model_dump()
         data["llm_config"] = _sanitize_llm_config(a.llm_config)
         data["retrieval_config"] = _sanitize_retrieval_config(a.retrieval_config)
         data["widget_config"] = _sanitize_widget_config(a.widget_config)
+        data["pending_approvals"] = pa_map.get(a.id, 0)
+        data["pending_reviews"] = pr_map.get(a.id, 0)
         out.append(AppDetailOut(**data, kb_ids=kb_map.get(a.id, [])))
     return out
 

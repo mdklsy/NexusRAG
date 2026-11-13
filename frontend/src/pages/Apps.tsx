@@ -1,5 +1,6 @@
 import {
   Alert,
+  Badge,
   Button,
   ColorPicker,
   Card,
@@ -47,6 +48,8 @@ interface AppRow {
   retrieval_config: any;
   is_active: boolean;
   kb_ids?: string[];
+  pending_approvals?: number;
+  pending_reviews?: number;
 }
 
 const ICONS = ["🤖", "💬", "📚", "🛎️", "🎯", "💡", "⚖️", "🏥", "🏢", "🛒"];
@@ -118,25 +121,6 @@ function ConfigForm({
     value: t.name,
     label: `${t.name}（${t.type === "http_api" ? "HTTP" : "SQL"}）`,
   }));
-  // 人机协作：待审批工具调用 + 待审核回答（仅编辑已有应用时拉取）
-  const qc = useQueryClient();
-  const { data: approvals } = useQuery({
-    queryKey: ["approvals", editingId],
-    queryFn: () => api.get<any[]>(`/api/v1/apps/${editingId}/approvals?status=pending`),
-    enabled: !!editingId,
-    refetchInterval: 15000,
-  });
-  const { data: reviews } = useQuery({
-    queryKey: ["reviews", editingId],
-    queryFn: () => api.get<any[]>(`/api/v1/apps/${editingId}/reviews`),
-    enabled: !!editingId,
-    refetchInterval: 15000,
-  });
-  const decideApproval = useMutation({
-    mutationFn: (v: { id: string; approved: boolean }) =>
-      api.post(`/api/v1/apps/${editingId}/approvals/${v.id}/decide`, { approved: v.approved }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["approvals", editingId] }),
-  });
   return (
     <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", model: "", agent_ui: { mode: "single", max_subtasks: 3, workers: [], parallel: true, max_concurrency: 4 } }}>
       <Tabs
@@ -507,83 +491,28 @@ function ConfigForm({
       )}
         </>
       ) },
-          ...(editingId
-            ? [{
-                key: "hitl", label: "人机协作", forceRender: true, children: (
+          {
+            key: "hitl", label: "人机协作", forceRender: true, children: (
         <>
-      <Typography.Title level={5} style={{ marginBottom: 4 }}>
-        人机协作（审批 + 审核）
-      </Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 0, fontSize: 12 }}>
+        这里只放应用级开关。待审批、待审核是运行中的业务事项，在应用列表的「人机协作」里处理。
+      </Typography.Paragraph>
       <Form.Item
         name={["retrieval_config", "review_mode"]}
         label="回答人工审核"
-        tooltip="开启后：每轮回答不再直接发给用户，而是进入下方「待审核回答」，你通过（可改写）后用户才可见。适合对答出内容负责的场景（客服对外话术等）。"
+        valuePropName="checked"
+        getValueProps={(v) => ({ checked: v === "on" })}
+        normalize={(checked) => (checked ? "on" : "off")}
+        tooltip="开启后：每轮回答不再直接发给用户，而是进入应用列表「人机协作」的待审核队列，你通过（可改写）后用户才可见。适合对答出内容负责的场景（客服对外话术等）。"
         extra={<span style={{ fontSize: 12 }}>默认关；挂件用户在审核期间看到“回答已生成，等待人工审核”</span>}
       >
-        <Select
-          allowClear
-          placeholder="关闭（默认）"
-          options={[
-            { value: "on", label: "开启：全部回答先审后发" },
-          ]}
-        />
+        <Switch />
       </Form.Item>
-      <Typography.Text strong>待审批工具调用</Typography.Text>
-      <Table
-        rowKey="id"
-        size="small"
-        style={{ marginBottom: 16 }}
-        dataSource={approvals || []}
-        pagination={false}
-        locale={{ emptyText: "没有待审批的工具调用。给敏感工具开启「调用前需人工确认」后，代理调用会先落到这里。" }}
-        columns={[
-          { title: "工具", dataIndex: "tool_name", width: 130 },
-          { title: "参数", dataIndex: "args", ellipsis: true, render: (v) => <code style={{ fontSize: 12 }}>{JSON.stringify(v)}</code> },
-          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
-          {
-            title: "",
-            width: 130,
-            render: (_, r) => (
-              <Space>
-                <Button size="small" type="primary" loading={decideApproval.isPending && decideApproval.variables?.id === r.id}
-                        onClick={() => decideApproval.mutate({ id: r.id, approved: true })}>
-                  通过执行
-                </Button>
-                <Popconfirm title="拒绝执行该调用？" onConfirm={() => decideApproval.mutate({ id: r.id, approved: false })}>
-                  <Button size="small" danger>拒绝</Button>
-                </Popconfirm>
-              </Space>
-            ),
-          },
-        ]}
-      />
-      <Typography.Text strong>待审核回答</Typography.Text>
-      <Table
-        rowKey="message_id"
-        size="small"
-        dataSource={reviews || []}
-        pagination={false}
-        locale={{ emptyText: "没有待审核的回答。开启「回答人工审核」后，每轮回答会先落到这里等你放行。" }}
-        expandable={{
-          defaultExpandAllRows: false,
-          expandedRowRender: (r: any) => (
-            <ReviewEditRow
-              row={r}
-              appId={editingId!}
-              onDone={() => qc.invalidateQueries({ queryKey: ["reviews", editingId] })}
-            />
-          ),
-          rowExpandable: () => true,
-        }}
-        columns={[
-          { title: "会话", dataIndex: "conversation_title", width: 160, ellipsis: true },
-          { title: "待发回答（展开可改写）", dataIndex: "content", ellipsis: true },
-          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
-        ]}
-      />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        工具调用审批：到「业务工具」页签，给具体工具勾选「调用前需人工确认」（按工具配置，不在应用级开关）。
+      </Typography.Text>
         </>
       ) },
-            ] : []),
           { key: "widget", label: "网页挂件", forceRender: true, children: (
         <>
       <Typography.Title level={5} style={{ marginBottom: 4 }}>
@@ -678,7 +607,97 @@ function ConfigForm({
   );
 }
 
-/** 待审核回答的行内审核：通过原文 / 改写后通过 / 驳回（编辑抽屉「人机协作」页签用） */
+/** 人机协作业务队列：待审批工具调用 + 待审核回答（应用列表入口，非配置） */
+function HumanLoopModal({
+  appId, appName, open, onClose,
+}: { appId?: string; appName?: string; open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data: approvals } = useQuery({
+    queryKey: ["approvals", appId],
+    queryFn: () => api.get<any[]>(`/api/v1/apps/${appId}/approvals?status=pending`),
+    enabled: open && !!appId,
+    refetchInterval: 15000,
+  });
+  const { data: reviews } = useQuery({
+    queryKey: ["reviews", appId],
+    queryFn: () => api.get<any[]>(`/api/v1/apps/${appId}/reviews`),
+    enabled: open && !!appId,
+    refetchInterval: 15000,
+  });
+  const decideApproval = useMutation({
+    mutationFn: (v: { id: string; approved: boolean }) =>
+      api.post(`/api/v1/apps/${appId}/approvals/${v.id}/decide`, { approved: v.approved }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["approvals", appId] });
+      qc.invalidateQueries({ queryKey: ["apps"] }); // 列表角标同步
+    },
+  });
+  const reviewDone = () => {
+    qc.invalidateQueries({ queryKey: ["reviews", appId] });
+    qc.invalidateQueries({ queryKey: ["apps"] });
+  };
+  return (
+    <Modal
+      title={`人机协作 - ${appName || ""}`}
+      open={open}
+      width={720}
+      onCancel={onClose}
+      footer={null}
+    >
+      <Typography.Text strong>待审批工具调用</Typography.Text>
+      <Table
+        rowKey="id"
+        size="small"
+        style={{ marginBottom: 16 }}
+        dataSource={approvals || []}
+        pagination={false}
+        locale={{ emptyText: "没有待审批的工具调用。" }}
+        columns={[
+          { title: "工具", dataIndex: "tool_name", width: 130 },
+          { title: "参数", dataIndex: "args", ellipsis: true, render: (v) => <code style={{ fontSize: 12 }}>{JSON.stringify(v)}</code> },
+          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
+          {
+            title: "",
+            width: 130,
+            render: (_, r) => (
+              <Space>
+                <Button size="small" type="primary" loading={decideApproval.isPending && decideApproval.variables?.id === r.id}
+                        onClick={() => decideApproval.mutate({ id: r.id, approved: true })}>
+                  通过执行
+                </Button>
+                <Popconfirm title="拒绝执行该调用？" onConfirm={() => decideApproval.mutate({ id: r.id, approved: false })}>
+                  <Button size="small" danger>拒绝</Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+      />
+      <Typography.Text strong>待审核回答</Typography.Text>
+      <Table
+        rowKey="message_id"
+        size="small"
+        dataSource={reviews || []}
+        pagination={false}
+        locale={{ emptyText: "没有待审核的回答。" }}
+        expandable={{
+          defaultExpandAllRows: false,
+          expandedRowRender: (r: any) => (
+            <ReviewEditRow row={r} appId={appId!} onDone={reviewDone} />
+          ),
+          rowExpandable: () => true,
+        }}
+        columns={[
+          { title: "会话", dataIndex: "conversation_title", width: 160, ellipsis: true },
+          { title: "待发回答（展开可改写）", dataIndex: "content", ellipsis: true },
+          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
+        ]}
+      />
+    </Modal>
+  );
+}
+
+/** 待审核回答的行内审核：通过原文 / 改写后通过 / 驳回（应用列表「人机协作」弹窗用） */
 function ReviewEditRow({ row, appId, onDone }: { row: any; appId: string; onDone: () => void }) {
   const [text, setText] = useState<string>(row.content || "");
   const decide = useMutation({
@@ -942,7 +961,7 @@ function ToolsSection({ appId }: { appId: string }) {
                 name={["config", "require_approval"]}
                 label="调用前需人工确认"
                 valuePropName="checked"
-                tooltip="人机协作：代理要调这个工具时不直接执行，先在「人机协作」页签生成待审批单；你通过后系统才真正执行，并把结果自动回复到原对话。适合退款、发货、发短信这类有真实后果的接口。"
+                tooltip="人机协作：代理要调这个工具时不直接执行，先在应用列表的「人机协作」里生成待审批单；你通过后系统才真正执行，并把结果自动回复到原对话。适合退款、发货、发短信这类有真实后果的接口。"
                 extra={<span style={{ fontSize: 12 }}>默认关；开启后挂件用户会看到“已提交人工审批”</span>}
               >
                 <Switch />
@@ -961,6 +980,7 @@ export default function Apps() {
   const [creating, setCreating] = useState(false);
   const [form] = Form.useForm();
   const [keyApp, setKeyApp] = useState<AppRow | null>(null);
+  const [hitlApp, setHitlApp] = useState<AppRow | null>(null);
   const [newKey, setNewKey] = useState<string | null>(null);
 
   const { data: apps } = useQuery({
@@ -1117,11 +1137,16 @@ export default function Apps() {
           {
             title: "操作",
             width: 240,
-            render: (_, r) => (
+            render: (_, r) => {
+              const hitlCount = (r.pending_approvals || 0) + (r.pending_reviews || 0);
+              return (
               <Space>
                 <Button size="small" onClick={() => openEdit(r)}>
                   配置
                 </Button>
+                <Badge count={hitlCount} size="small" offset={[-4, 0]}>
+                  <Button size="small" onClick={() => setHitlApp(r)}>人机协作</Button>
+                </Badge>
                 <Button size="small" icon={<KeyOutlined />} onClick={() => { setKeyApp(r); setNewKey(null); }}>
                   API Key
                 </Button>
@@ -1131,9 +1156,17 @@ export default function Apps() {
                   </Button>
                 </Popconfirm>
               </Space>
-            ),
+              );
+            },
           },
         ]}
+      />
+
+      <HumanLoopModal
+        appId={hitlApp?.id}
+        appName={hitlApp?.name}
+        open={!!hitlApp}
+        onClose={() => setHitlApp(null)}
       />
 
       <Modal

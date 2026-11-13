@@ -131,6 +131,8 @@ class AppOut(ORMModel):
     widget_config: dict = {}
     is_active: bool
     created_at: datetime
+    pending_approvals: int = 0  # 人机协作：待审批工具调用数
+    pending_reviews: int = 0  # 人机协作：待人工审核回答数
 
 
 class AppDetailOut(AppOut):
