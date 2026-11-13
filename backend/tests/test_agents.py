@@ -144,8 +144,8 @@ async def test_planner_workers_end_to_end(monkeypatch):
 
     types = [e["type"] for e in events]
     assert types[0] == "plan"
-    # 幽灵代理被过滤，只剩 1 个子任务
-    assert events[0]["subtasks"] == [{"title": "查政策", "worker": "检索员"}]
+    # 幽灵代理被过滤，只剩 1 个子任务（plan 事件另带 depends_on 字段）
+    assert [(x["title"], x["worker"]) for x in events[0]["subtasks"]] == [("查政策", "检索员")]
     assert "agent_start" in types and "agent_done" in types
     # 汇总是流式 delta 且系统提示词注入了协作规则
     deltas = "".join(e["content"] for e in events if e["type"] == "delta")
@@ -161,3 +161,120 @@ async def test_planner_workers_requires_workers():
 
     events = await _collect(planner_workers(None, [], [], "q", {"mode": "planner_workers"}))
     assert "workers 未配置" in events[0]["content"]
+
+
+async def test_planner_workers_parallel_waves():
+    """波次并行：无依赖的并发先跑，依赖者等前置完成；汇总按规划顺序排列产出。"""
+    from app.services.agents import planner_workers
+    import app.services.agents.runner as runner_mod
+
+    monkeypatch_mod = None
+    import pytest as _pytest
+    _mp = _pytest.MonkeyPatch()
+    _mp.setattr(runner_mod, "execute_tool", lambda tool, args, ctx=None: "数据")
+    try:
+        # 三个 worker 各跑一轮直接作答；脚本弹出资序在波内不确定，靠结论文本区分
+        llm = ScriptedLLM(
+            script=[("结论甲", None), ("结论乙", None), ("结论丙", None)],
+            plan_json=(
+                '{"subtasks": ['
+                '{"title": "查A", "worker": "w1", "instruction": "查A", "depends_on": []},'
+                '{"title": "查B", "worker": "w2", "instruction": "查B", "depends_on": []},'
+                '{"title": "析C", "worker": "w3", "instruction": "基于A和B分析", "depends_on": ["查A", "查B"]}'
+                ']}'
+            ),
+        )
+        config = {
+            "mode": "planner_workers", "max_subtasks": 4,
+            "parallel": True, "max_concurrency": 2,
+            "workers": [
+                {"name": "w1", "system_prompt": "查A的", "max_rounds": 1},
+                {"name": "w2", "system_prompt": "查B的", "max_rounds": 1},
+                {"name": "w3", "system_prompt": "分析C的", "max_rounds": 1},
+            ],
+        }
+        messages = [{"role": "system", "content": "主提示词"}, {"role": "user", "content": "问题"}]
+        events = await _collect(planner_workers(
+            llm, messages, [_tool()], "问题", config, ctx={"metadata": {}},
+        ))
+
+        starts = [e["agent"] for e in events if e["type"] == "agent_start"]
+        assert set(starts) == {"w1", "w2", "w3"}
+        # 依赖者 w3 必须在 w1/w2 都开始之后才开跑
+        i1, i2, i3 = starts.index("w1"), starts.index("w2"), starts.index("w3")
+        assert i3 > i1 and i3 > i2
+        # 汇总产出按规划顺序（甲、乙、丙），不随完成顺序乱
+        assert "结论甲" in llm.streamed_msgs[-1]["content"]
+        assert llm.streamed_msgs[-1]["content"].index("结论甲") < llm.streamed_msgs[-1]["content"].index("结论丙")
+        # plan 事件带依赖信息
+        plan = events[0]
+        assert plan["subtasks"][2]["depends_on"] == ["查A", "查B"]
+        usage = next(e for e in events if e["type"] == "usage")
+        assert usage["tokens_in"] > 0
+    finally:
+        _mp.undo()
+
+
+async def test_planner_workers_parallel_cycle_breaks():
+    """依赖成环自动打破：两个互为依赖的子任务仍然全部执行（不挂死）。"""
+    from app.services.agents import planner_workers
+    import app.services.agents.runner as runner_mod
+    import pytest as _pytest
+    _mp = _pytest.MonkeyPatch()
+    _mp.setattr(runner_mod, "execute_tool", lambda tool, args, ctx=None: "x")
+    try:
+        llm = ScriptedLLM(
+            script=[("甲done", None), ("乙done", None)],
+            plan_json=(
+                '{"subtasks": ['
+                '{"title": "T1", "worker": "w1", "instruction": "a", "depends_on": ["T2"]},'
+                '{"title": "T2", "worker": "w2", "instruction": "b", "depends_on": ["T1"]}'
+                ']}'
+            ),
+        )
+        config = {
+            "mode": "planner_workers", "parallel": True,
+            "workers": [
+                {"name": "w1", "system_prompt": "s1", "max_rounds": 1},
+                {"name": "w2", "system_prompt": "s2", "max_rounds": 1},
+            ],
+        }
+        messages = [{"role": "system", "content": "m"}, {"role": "user", "content": "q"}]
+        events = await _collect(planner_workers(llm, messages, [_tool()], "q", config))
+        dones = [e["agent"] for e in events if e["type"] == "agent_done"]
+        assert sorted(dones) == ["w1", "w2"]
+    finally:
+        _mp.undo()
+
+
+async def test_planner_workers_serial_mode_order():
+    """parallel=false：严格串行，事件时序紧凑（start→done→下一个 start）。"""
+    from app.services.agents import planner_workers
+    import app.services.agents.runner as runner_mod
+    import pytest as _pytest
+    _mp = _pytest.MonkeyPatch()
+    _mp.setattr(runner_mod, "execute_tool", lambda tool, args, ctx=None: "x")
+    try:
+        llm = ScriptedLLM(
+            script=[("甲done", None), ("乙done", None)],
+            plan_json=(
+                '{"subtasks": ['
+                '{"title": "T1", "worker": "w1", "instruction": "a"},'
+                '{"title": "T2", "worker": "w2", "instruction": "b"}'
+                ']}'
+            ),
+        )
+        config = {
+            "mode": "planner_workers", "parallel": False,
+            "workers": [
+                {"name": "w1", "system_prompt": "s1", "max_rounds": 1},
+                {"name": "w2", "system_prompt": "s2", "max_rounds": 1},
+            ],
+        }
+        messages = [{"role": "system", "content": "m"}, {"role": "user", "content": "q"}]
+        events = await _collect(planner_workers(llm, messages, [_tool()], "q", config))
+        seq = [(e["type"], e.get("agent")) for e in events if e["type"] in ("agent_start", "agent_done")]
+        # 串行：w1 整段完成后 w2 才开始
+        assert seq == [("agent_start", "w1"), ("agent_done", "w1"), ("agent_start", "w2"), ("agent_done", "w2")]
+    finally:
+        _mp.undo()

@@ -107,6 +107,7 @@ function ConfigForm({
   const bubbleVal = Form.useWatch(["widget_config", "bubble"], form) as string | undefined;
   const rerankCfg = Form.useWatch(["retrieval_config", "rerank_config"], form) as any;
   const agentMode = Form.useWatch(["agent_ui", "mode"], form);
+  const agentParallel = Form.useWatch(["agent_ui", "parallel"], form);
   // 工具白名单多选数据源：与业务工具页签共用一份查询缓存
   const { data: agentToolList } = useQuery({
     queryKey: ["tools", editingId],
@@ -118,7 +119,7 @@ function ConfigForm({
     label: `${t.name}（${t.type === "http_api" ? "HTTP" : "SQL"}）`,
   }));
   return (
-    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", model: "", agent_ui: { mode: "single", max_subtasks: 3, workers: [] } }}>
+    <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, top_k: 5, score_threshold: 0.35, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", model: "", agent_ui: { mode: "single", max_subtasks: 3, workers: [], parallel: true, max_concurrency: 4 } }}>
       <Tabs
         items={[
           { key: "basic", label: "基本信息", forceRender: true, children: (
@@ -378,11 +379,35 @@ function ConfigForm({
           </Form.Item>
         </Col>
         {agentMode === "planner_workers" && (
-          <Col span={6}>
+          <Col span={5}>
             <Form.Item
               name={["agent_ui", "max_subtasks"]}
               label="最多子任务数"
               extra={<span style={{ fontSize: 12 }}>规划器一次最多拆几个子任务（1~8）</span>}
+            >
+              <InputNumber min={1} max={8} style={{ width: "100%" }} />
+            </Form.Item>
+          </Col>
+        )}
+        {agentMode === "planner_workers" && (
+          <Col span={5}>
+            <Form.Item
+              name={["agent_ui", "parallel"]}
+              label="并行执行"
+              valuePropName="checked"
+              tooltip="开启后互不依赖的子任务按依赖波次并发执行（波内受并发数限制），总耗时约等于最慢一波；关闭则严格串行（适合 LLM 供应商并发配额受限的场景）。"
+              extra={<span style={{ fontSize: 12 }}>默认开</span>}
+            >
+              <Switch />
+            </Form.Item>
+          </Col>
+        )}
+        {agentMode === "planner_workers" && agentParallel !== false && (
+          <Col span={5}>
+            <Form.Item
+              name={["agent_ui", "max_concurrency"]}
+              label="单波最大并发"
+              extra={<span style={{ fontSize: 12 }}>同一波同时执行的代理数上限（1~8）</span>}
             >
               <InputNumber min={1} max={8} style={{ width: "100%" }} />
             </Form.Item>
@@ -804,6 +829,8 @@ export default function Apps() {
         agentConfig = {
           mode: "planner_workers",
           max_subtasks: agent_ui.max_subtasks ?? 3,
+          parallel: agent_ui.parallel !== false,
+          max_concurrency: agent_ui.max_concurrency ?? 4,
           workers: (agent_ui.workers || []).map((w: any) => ({
             name: w.name,
             system_prompt: w.system_prompt,
@@ -862,6 +889,8 @@ export default function Apps() {
           ? {
               mode: "planner_workers",
               max_subtasks: agentCfg.max_subtasks ?? 3,
+              parallel: agentCfg.parallel !== false,
+              max_concurrency: agentCfg.max_concurrency ?? 4,
               workers: (agentCfg.workers || []).map((w: any) => ({
                 name: w.name,
                 system_prompt: w.system_prompt,

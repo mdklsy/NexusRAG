@@ -30,9 +30,20 @@ services/agents/
 
 ## 两种协作形态
 
-**planner_workers（规划-分发-汇总）**：规划器把问题拆成子任务并指派给注册的
-worker（各自系统提示词 + 工具白名单），顺序执行后由汇总 agent 结合原始上下文
-与检索资料流式生成最终回答。
+**planner_workers（规划-分发-汇总）**：规划器把问题拆成子任务、指派给注册的
+worker（各自系统提示词 + 工具白名单）并标注 `depends_on` 依赖，按依赖拓扑
+**分波执行（波内并发、波间等待）**，最后由汇总 agent 结合原始上下文与全部
+产出流式生成最终回答。
+
+### 并行编排（依赖波次）
+
+- 规划器为每个子任务输出 `depends_on`（前置子任务 title 数组）；无效/自引用依赖被忽略
+- 波次按 Kahn 分层：第 1 波 = 无依赖任务，第 n 波 = 依赖全落在前 n-1 波的任务
+- 依赖成环自动打破：剩余节点视为互不依赖塞进最后一波（保证必然终止）
+- `parallel`（默认 true）：false 退化为严格串行（LLM 供应商并发配额受限的场景）
+- `max_concurrency`（默认 4，钳 1~8）：同一波同时执行的代理数上限
+- 汇总产出按**规划顺序**拼接（不随完成顺序乱）；单个代理失败转为失败结论进汇总，不拖垮整体
+- 事件新增 `wave` 字段（agent_start/agent_done），消费端可忽略
 
 **handoff 委派**（runner 内建）：agent 配置 `delegates` 后自动获得
 `handoff_to_<子代理>` 工具，把自包含任务文本转交子代理独立执行，结论作为工具
@@ -48,6 +59,8 @@ PUT /api/v1/apps/{id}
     "agent_config": {
       "mode": "planner_workers",
       "max_subtasks": 4,
+      "parallel": true,
+      "max_concurrency": 4,
       "workers": [
         {"name": "检索员", "system_prompt": "你是资料检索专家…", "max_rounds": 2},
         {"name": "查数员", "system_prompt": "你是业务数据专家…",
@@ -64,6 +77,6 @@ PUT /api/v1/apps/{id}
 
 ## 设计取舍
 
-- **顺序执行**而非并行：工具多为内网 API/SQL，并行收益小且日志可读性差；后续有需要再引 asyncio.gather
+- **依赖波次并行**：LLM 调用是墙钟大头，无依赖子任务并发收益真实；波内信号量限流兜住供应商并发配额；要严格时序可 `parallel: false`
 - **委派 = 合成工具**而非独立消息通道：完全复用 function calling 协议，所有 LLM 提供商兼容
 - **多 agent 不改变记忆/落库**：usage 累计入同一条 assistant 消息；中间代理产出不落 messages 表（避免污染上下文窗口）
