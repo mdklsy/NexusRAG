@@ -37,10 +37,12 @@ export default function Layout() {
     {
       key: "/hitl",
       icon: <SafetyCertificateOutlined />,
+      // Badge 不包文字：包裹子元素会截断暗色菜单的颜色继承，导致文字变深色不可读
       label: (
-        <Badge count={hitlTotal} size="small" offset={[8, 0]}>
+        <span>
           人机协作
-        </Badge>
+          {hitlTotal > 0 && <Badge count={hitlTotal} size="small" style={{ marginLeft: 10 }} />}
+        </span>
       ),
     },
     { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
