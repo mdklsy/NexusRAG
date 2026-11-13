@@ -148,32 +148,81 @@ async def continue_after_decision(
     return msg
 
 
-async def list_actions(session: AsyncSession, app_id, status: str | None = None, limit: int = 50):
+async def list_actions(
+    session: AsyncSession, app_id=None, status: str | None = None, limit: int = 200
+):
+    """审批单列表；app_id=None 时跨应用（全局人机协作页）。"""
     stmt = (
-        select(PendingAction)
-        .where(PendingAction.app_id == app_id)
+        select(PendingAction, App.name)
+        .join(App, App.id == PendingAction.app_id)
         .order_by(PendingAction.created_at.desc())
         .limit(limit)
     )
+    if app_id:
+        stmt = stmt.where(PendingAction.app_id == app_id)
     if status:
         stmt = stmt.where(PendingAction.status == status)
-    return list((await session.execute(stmt)).scalars().all())
+    return [{"action": a, "app_name": n} for a, n in (await session.execute(stmt)).all()]
 
 
-async def list_pending_reviews(session: AsyncSession, app_id, limit: int = 50):
-    """待人工审核的回答（本应用下 review_status=pending 的 assistant 消息）。"""
+async def list_pending_reviews(session: AsyncSession, app_id=None, limit: int = 200):
+    """待人工审核的回答（review_status=pending 的 assistant 消息）；app_id=None 跨应用。"""
     from app.models.app import Conversation
 
     stmt = (
-        select(Message, Conversation.title)
+        select(Message, Conversation.title, App.name, Conversation.app_id)
         .join(Conversation, Conversation.id == Message.conversation_id)
+        .join(App, App.id == Conversation.app_id)
         .where(
-            Conversation.app_id == app_id,
             Message.role == "assistant",
             Message.review_status == "pending",
         )
         .order_by(Message.created_at.desc())
         .limit(limit)
     )
+    if app_id:
+        stmt = stmt.where(Conversation.app_id == app_id)
     rows = (await session.execute(stmt)).all()
-    return [{"message": m, "conversation_title": t} for m, t in rows]
+    return [
+        {"message": m, "conversation_title": t, "app_name": n, "app_id": aid}
+        for m, t, n, aid in rows
+    ]
+
+
+async def count_pending(session: AsyncSession) -> dict:
+    """全局待办数（侧边栏角标）：待审批工具调用 + 待人工审核回答。"""
+    from sqlalchemy import func
+
+    approvals = (
+        await session.execute(
+            select(func.count()).select_from(PendingAction).where(PendingAction.status == "pending")
+        )
+    ).scalar_one()
+    from app.models.app import Conversation
+
+    reviews = (
+        await session.execute(
+            select(func.count())
+            .select_from(Message)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(Message.role == "assistant", Message.review_status == "pending")
+        )
+    ).scalar_one()
+    return {"approvals": approvals, "reviews": reviews}
+
+
+async def decide_review(session: AsyncSession, msg: Message, action: str, content: str | None):
+    """答案审核决策：approve=放行原文；replace=改写后放行；reject=驳回（永不可见）。"""
+    if action == "approve":
+        msg.review_status = "published"
+    elif action == "replace":
+        if not (content or "").strip():
+            raise ValueError("改写内容不能为空")
+        msg.content = content
+        msg.review_status = "published"
+    elif action == "reject":
+        msg.review_status = "rejected"
+    else:
+        raise ValueError("action 仅支持 approve | replace | reject")
+    await session.commit()
+    return msg

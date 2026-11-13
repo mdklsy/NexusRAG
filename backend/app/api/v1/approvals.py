@@ -42,16 +42,16 @@ async def list_approvals(
     rows = await approvals.list_actions(session, app.id, status)
     return [
         {
-            "id": str(a.id),
-            "conversation_id": str(a.conversation_id),
-            "tool_name": a.tool_name,
-            "args": a.args,
-            "status": a.status,
-            "result_text": a.result_text,
-            "created_at": a.created_at,
-            "decided_at": a.decided_at,
+            "id": str(row["action"].id),
+            "conversation_id": str(row["action"].conversation_id),
+            "tool_name": row["action"].tool_name,
+            "args": row["action"].args,
+            "status": row["action"].status,
+            "result_text": row["action"].result_text,
+            "created_at": row["action"].created_at,
+            "decided_at": row["action"].decided_at,
         }
-        for a in rows
+        for row in rows
     ]
 
 
@@ -99,6 +99,8 @@ async def list_reviews(
         return [
             {
                 "message_id": str(row["message"].id),
+                "app_id": str(row["app_id"]),
+                "app_name": row["app_name"],
                 "conversation_id": str(row["message"].conversation_id),
                 "conversation_title": row["conversation_title"],
                 "content": row["message"].content,
@@ -132,16 +134,8 @@ async def decide_review(
         raise HTTPException(404, "消息不存在")
     if msg.review_status != "pending":
         raise HTTPException(409, f"该回答已处理（{msg.review_status}）")
-    if body.action == "approve":
-        msg.review_status = "published"
-    elif body.action == "replace":
-        if not (body.content or "").strip():
-            raise HTTPException(400, "改写内容不能为空")
-        msg.content = body.content
-        msg.review_status = "published"
-    elif body.action == "reject":
-        msg.review_status = "rejected"
-    else:
-        raise HTTPException(400, "action 仅支持 approve | replace | reject")
-    await session.commit()
+    try:
+        msg = await approvals.decide_review(session, msg, body.action, body.content)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     return {"review_status": msg.review_status}

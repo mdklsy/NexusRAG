@@ -14,6 +14,7 @@ from app.api.v1 import (
     settings,
     retrievals,
     tools,
+    hitl,
     users,
     wechat,
     widget,
@@ -27,6 +28,7 @@ api_router.include_router(documents.router)
 api_router.include_router(apps.router)
 api_router.include_router(approvals.router)
 api_router.include_router(tools.router)
+api_router.include_router(hitl.router)
 api_router.include_router(users.router)
 api_router.include_router(widget.router)
 api_router.include_router(retrievals.router)

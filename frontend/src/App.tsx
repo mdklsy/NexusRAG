@@ -7,6 +7,7 @@ import KnowledgeBases from "./pages/KnowledgeBases";
 import KBDetail from "./pages/KBDetail";
 import Playground from "./pages/Playground";
 import Evals from "./pages/Evals";
+import HumanLoop from "./pages/HumanLoop";
 import Users from "./pages/Users";
 import Settings from "./pages/Settings";
 
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="kbs/:kbId" element={<KBDetail />} />
         <Route path="playground" element={<Playground />} />
         <Route path="evals" element={<Evals />} />
+        <Route path="hitl" element={<HumanLoop />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="users" element={<Users />} />
         <Route path="settings" element={<Settings />} />

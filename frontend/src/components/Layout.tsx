@@ -1,14 +1,17 @@
-import { Layout as AntLayout, Menu, Button, Space, Typography } from "antd";
+import { Badge, Layout as AntLayout, Menu, Button, Space, Typography } from "antd";
 import {
   AppstoreOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   LogoutOutlined,
   DashboardOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../api/client";
 import { useAuth } from "../stores/auth";
 
 export default function Layout() {
@@ -18,12 +21,28 @@ export default function Layout() {
   if (!useAuth.getState().token) {
     nav("/login");
   }
+  // 人机协作全局待办角标（审批 + 审核），值班高频入口
+  const { data: hitlCounts } = useQuery({
+    queryKey: ["hitl-counts"],
+    queryFn: () => api.get<{ approvals: number; reviews: number }>("/api/v1/hitl/counts"),
+    refetchInterval: 20000,
+  });
+  const hitlTotal = (hitlCounts?.approvals || 0) + (hitlCounts?.reviews || 0);
 
   const items = [
     { key: "/apps", icon: <AppstoreOutlined />, label: "应用" },
     { key: "/kbs", icon: <DatabaseOutlined />, label: "知识库" },
     { key: "/playground", icon: <ExperimentOutlined />, label: "调试" },
     { key: "/evals", icon: <ExperimentOutlined />, label: "评测" },
+    {
+      key: "/hitl",
+      icon: <SafetyCertificateOutlined />,
+      label: (
+        <Badge count={hitlTotal} size="small" offset={[8, 0]}>
+          人机协作
+        </Badge>
+      ),
+    },
     { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
     ...(role === "admin"
       ? [

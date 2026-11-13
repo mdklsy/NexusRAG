@@ -36,6 +36,7 @@ import {
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 
 interface AppRow {
@@ -607,135 +608,6 @@ function ConfigForm({
   );
 }
 
-/** 人机协作业务队列：待审批工具调用 + 待审核回答（应用列表入口，非配置） */
-function HumanLoopModal({
-  appId, appName, open, onClose,
-}: { appId?: string; appName?: string; open: boolean; onClose: () => void }) {
-  const qc = useQueryClient();
-  const { data: approvals } = useQuery({
-    queryKey: ["approvals", appId],
-    queryFn: () => api.get<any[]>(`/api/v1/apps/${appId}/approvals?status=pending`),
-    enabled: open && !!appId,
-    refetchInterval: 15000,
-  });
-  const { data: reviews } = useQuery({
-    queryKey: ["reviews", appId],
-    queryFn: () => api.get<any[]>(`/api/v1/apps/${appId}/reviews`),
-    enabled: open && !!appId,
-    refetchInterval: 15000,
-  });
-  const decideApproval = useMutation({
-    mutationFn: (v: { id: string; approved: boolean }) =>
-      api.post(`/api/v1/apps/${appId}/approvals/${v.id}/decide`, { approved: v.approved }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["approvals", appId] });
-      qc.invalidateQueries({ queryKey: ["apps"] }); // 列表角标同步
-    },
-  });
-  const reviewDone = () => {
-    qc.invalidateQueries({ queryKey: ["reviews", appId] });
-    qc.invalidateQueries({ queryKey: ["apps"] });
-  };
-  return (
-    <Modal
-      title={`人机协作 - ${appName || ""}`}
-      open={open}
-      width={720}
-      onCancel={onClose}
-      footer={null}
-    >
-      <Typography.Text strong>待审批工具调用</Typography.Text>
-      <Table
-        rowKey="id"
-        size="small"
-        style={{ marginBottom: 16 }}
-        dataSource={approvals || []}
-        pagination={false}
-        locale={{ emptyText: "没有待审批的工具调用。" }}
-        columns={[
-          { title: "工具", dataIndex: "tool_name", width: 130 },
-          { title: "参数", dataIndex: "args", ellipsis: true, render: (v) => <code style={{ fontSize: 12 }}>{JSON.stringify(v)}</code> },
-          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
-          {
-            title: "",
-            width: 130,
-            render: (_, r) => (
-              <Space>
-                <Button size="small" type="primary" loading={decideApproval.isPending && decideApproval.variables?.id === r.id}
-                        onClick={() => decideApproval.mutate({ id: r.id, approved: true })}>
-                  通过执行
-                </Button>
-                <Popconfirm title="拒绝执行该调用？" onConfirm={() => decideApproval.mutate({ id: r.id, approved: false })}>
-                  <Button size="small" danger>拒绝</Button>
-                </Popconfirm>
-              </Space>
-            ),
-          },
-        ]}
-      />
-      <Typography.Text strong>待审核回答</Typography.Text>
-      <Table
-        rowKey="message_id"
-        size="small"
-        dataSource={reviews || []}
-        pagination={false}
-        locale={{ emptyText: "没有待审核的回答。" }}
-        expandable={{
-          defaultExpandAllRows: false,
-          expandedRowRender: (r: any) => (
-            <ReviewEditRow row={r} appId={appId!} onDone={reviewDone} />
-          ),
-          rowExpandable: () => true,
-        }}
-        columns={[
-          { title: "会话", dataIndex: "conversation_title", width: 160, ellipsis: true },
-          { title: "待发回答（展开可改写）", dataIndex: "content", ellipsis: true },
-          { title: "时间", dataIndex: "created_at", width: 150, render: (v) => String(v || "").replace("T", " ").slice(0, 19) },
-        ]}
-      />
-    </Modal>
-  );
-}
-
-/** 待审核回答的行内审核：通过原文 / 改写后通过 / 驳回（应用列表「人机协作」弹窗用） */
-function ReviewEditRow({ row, appId, onDone }: { row: any; appId: string; onDone: () => void }) {
-  const [text, setText] = useState<string>(row.content || "");
-  const decide = useMutation({
-    mutationFn: (v: { action: string; content?: string }) =>
-      api.post(`/api/v1/apps/${appId}/reviews/${row.message_id}/decide`, v),
-    onSuccess: () => {
-      message.success("已处理");
-      onDone();
-    },
-    onError: (e: any) => message.error(String(e?.message || e)),
-  });
-  const changed = text !== (row.content || "");
-  return (
-    <div>
-      <Input.TextArea
-        rows={4}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        style={{ marginBottom: 8 }}
-      />
-      <Space>
-        <Button
-          size="small"
-          type="primary"
-          loading={decide.isPending}
-          disabled={decide.isPending}
-          onClick={() => decide.mutate(changed ? { action: "replace", content: text } : { action: "approve" })}
-        >
-          {changed ? "改写后通过" : "通过原文"}
-        </Button>
-        <Popconfirm title="驳回后该回答对用户永久不可见，确认？" onConfirm={() => decide.mutate({ action: "reject" })}>
-          <Button size="small" danger disabled={decide.isPending}>驳回</Button>
-        </Popconfirm>
-      </Space>
-    </div>
-  );
-}
-
 /** 业务工具（连接器）管理：编辑抽屉内使用 */
 function ToolsSection({ appId }: { appId: string }) {
   const qc = useQueryClient();
@@ -976,11 +848,12 @@ function ToolsSection({ appId }: { appId: string }) {
 
 export default function Apps() {
   const qc = useQueryClient();
+  const nav = useNavigate();
   const [editing, setEditing] = useState<AppRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [form] = Form.useForm();
   const [keyApp, setKeyApp] = useState<AppRow | null>(null);
-  const [hitlApp, setHitlApp] = useState<AppRow | null>(null);
+
   const [newKey, setNewKey] = useState<string | null>(null);
 
   const { data: apps } = useQuery({
@@ -1145,7 +1018,7 @@ export default function Apps() {
                   配置
                 </Button>
                 <Badge count={hitlCount} size="small" offset={[-4, 0]}>
-                  <Button size="small" onClick={() => setHitlApp(r)}>人机协作</Button>
+                  <Button size="small" onClick={() => nav(`/hitl?app=${r.id}`)}>人机协作</Button>
                 </Badge>
                 <Button size="small" icon={<KeyOutlined />} onClick={() => { setKeyApp(r); setNewKey(null); }}>
                   API Key
@@ -1160,13 +1033,6 @@ export default function Apps() {
             },
           },
         ]}
-      />
-
-      <HumanLoopModal
-        appId={hitlApp?.id}
-        appName={hitlApp?.name}
-        open={!!hitlApp}
-        onClose={() => setHitlApp(null)}
       />
 
       <Modal

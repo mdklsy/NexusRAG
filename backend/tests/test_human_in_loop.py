@@ -258,3 +258,51 @@ async def test_apps_list_pending_counts(sqlite_env):
         row = next(a for a in r.json() if a["id"] == str(app_id))
         assert row["pending_approvals"] == 1
         assert row["pending_reviews"] == 1
+
+
+async def test_hitl_global_routes(sqlite_env, monkeypatch):
+    """全局 /hitl 值班队列：跨应用列表带应用名、计数端点、全局审批/审核决策。"""
+    orch = _orch()
+    executed = []
+    monkeypatch.setattr("app.services.tools.execute_tool",
+                        lambda t, a, ctx=None: executed.append((t.name, a)) or "退款成功")
+    fake = ApprovalLLM()
+    monkeypatch.setattr("app.services.llm.get_llm_client", lambda *_: fake)
+
+    app_id, conv_id, token = await _mk_env()
+    async with session_scope() as session:
+        session.add(PendingAction(
+            app_id=app_id, conversation_id=conv_id, tool_name="refund",
+            args={"order_id": "B1"}, ctx_snapshot={},
+        ))
+        session.add(Message(
+            conversation_id=conv_id, role="assistant",
+            content="待审核草稿", review_status="pending",
+        ))
+        await session.commit()
+
+    from app.main import app as fastapi_app
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://t") as client:
+        H = {"Authorization": f"Bearer {token}"}
+        r = await client.get("/api/v1/hitl/counts", headers=H)
+        assert r.status_code == 200 and r.json() == {"approvals": 1, "reviews": 1}
+
+        r = await client.get("/api/v1/hitl/approvals", headers=H)
+        rows = r.json()
+        assert rows and rows[0]["app_name"] == "人机协作测试" and rows[0]["tool_name"] == "refund"
+
+        r = await client.post(f"/api/v1/hitl/approvals/{rows[0]['id']}/decide",
+                              headers=H, json={"approved": True})
+        assert r.status_code == 200 and r.json()["status"] == "approved"
+        assert executed and executed[0][0] == "refund"
+
+        r = await client.get("/api/v1/hitl/reviews", headers=H)
+        assert r.json() and r.json()[0]["content"] == "待审核草稿"
+        mid = r.json()[0]["message_id"]
+        r = await client.post(f"/api/v1/hitl/reviews/{mid}/decide",
+                              headers=H, json={"action": "reject"})
+        assert r.status_code == 200 and r.json()["review_status"] == "rejected"
+
+        r = await client.get("/api/v1/hitl/counts", headers=H)
+        assert r.json() == {"approvals": 0, "reviews": 0}
