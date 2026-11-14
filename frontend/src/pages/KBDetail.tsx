@@ -16,6 +16,7 @@ import {
   Typography,
   Upload,
   Radio,
+  Select,
 } from "antd";
 import { LinkOutlined, UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,7 +33,7 @@ interface Doc {
   chunk_count: number;
   size_bytes: number;
   created_at: string;
-  acl?: { mode: string; end_users?: string[] } | null;
+  acl?: { mode: string; end_users?: string[]; claims?: { key: string; values: string[] }[] } | null;
 }
 
 const STATUS_TAG: Record<string, [string, string]> = {
@@ -121,13 +122,41 @@ export default function KBDetail() {
   const [aclDoc, setAclDoc] = useState<Doc | null>(null);
   const [aclMode, setAclMode] = useState<"public" | "restricted">("public");
   const [aclUsers, setAclUsers] = useState("");
+  // 属性声明条件（ACL v2）：[{key, values[]}]；对接系统传什么声明就按条件匹配，无需登记用户 ID
+  const [aclClaims, setAclClaims] = useState<{ key: string; values: string[] }[]>([]);
+  // 块级 ACL（覆盖模式）
+  const [aclChunk, setAclChunk] = useState<any | null>(null);
+  const [chunkAclMode, setChunkAclMode] = useState<"inherit" | "public" | "restricted">("inherit");
+  const [chunkAclUsers, setChunkAclUsers] = useState("");
+  const [chunkAclClaims, setChunkAclClaims] = useState<{ key: string; values: string[] }[]>([]);
   const aclSave = useMutation({
-    mutationFn: (v: { id: string; mode: string; users: string[] }) =>
-      api.put(`/api/v1/documents/${v.id}/acl`, { mode: v.mode, end_users: v.users }),
+    mutationFn: (v: {
+      id: string; mode: string; users: string[];
+      claims: { key: string; values: string[] }[];
+    }) =>
+      api.put(`/api/v1/documents/${v.id}/acl`, {
+        mode: v.mode, end_users: v.users, claims: v.claims,
+      }),
     onSuccess: () => {
       message.success("可见范围已更新");
       setAclDoc(null);
       qc.invalidateQueries({ queryKey: ["docs", kbId] });
+    },
+    onError: (e: any) => message.error(String(e?.message || e)),
+  });
+
+  const chunkAclSave = useMutation({
+    mutationFn: (v: {
+      id: string; mode: string; users: string[];
+      claims: { key: string; values: string[] }[];
+    }) =>
+      api.put(`/api/v1/chunks/${v.id}/acl`, {
+        mode: v.mode, end_users: v.users, claims: v.claims,
+      }),
+    onSuccess: () => {
+      message.success("分块可见范围已更新");
+      setAclChunk(null);
+      if (chunkDoc) qc.invalidateQueries({ queryKey: ["chunks", chunkDoc.id] });
     },
     onError: (e: any) => message.error(String(e?.message || e)),
   });
@@ -236,6 +265,7 @@ export default function KBDetail() {
                       setAclDoc(r);
                       setAclMode(r.acl?.mode === "restricted" ? "restricted" : "public");
                       setAclUsers((r.acl?.end_users || []).join(", "));
+                      setAclClaims(r.acl?.claims || []);
                     }}
                   >
                     可见范围
@@ -270,6 +300,7 @@ export default function KBDetail() {
             id: aclDoc!.id,
             mode: aclMode,
             users: aclUsers.split(/[,，\s]+/).filter(Boolean),
+            claims: aclClaims.filter((c) => c.key.trim() && c.values.length),
           })
         }
         confirmLoading={aclSave.isPending}
@@ -278,19 +309,62 @@ export default function KBDetail() {
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
           <Radio.Group value={aclMode} onChange={(e) => setAclMode(e.target.value)}>
             <Radio value="public">公开：所有终端用户可见（默认）</Radio>
-            <Radio value="restricted">受限：仅指定终端用户可见</Radio>
+            <Radio value="restricted">受限：满足下方任一授权规则才可见</Radio>
           </Radio.Group>
           {aclMode === "restricted" && (
-            <Input.TextArea
-              rows={3}
-              value={aclUsers}
-              onChange={(e) => setAclUsers(e.target.value)}
-              placeholder="终端用户 ID，逗号分隔（即挂件接入时传入的 end_user.id）"
-            />
+            <>
+              <Typography.Text style={{ fontSize: 12 }}>属性声明条件（对接系统在 end_user.attributes 里传什么就匹配什么；多条件需同时满足）</Typography.Text>
+              {aclClaims.map((c, i) => (
+                <Space key={i} style={{ display: "flex", marginBottom: 4 }} wrap>
+                  <Input
+                    style={{ width: 140 }}
+                    placeholder="属性名，如 dept"
+                    value={c.key}
+                    onChange={(e) => {
+                      const next = [...aclClaims];
+                      next[i] = { ...next[i], key: e.target.value };
+                      setAclClaims(next);
+                    }}
+                  />
+                  <Select
+                    mode="tags"
+                    style={{ width: 260 }}
+                    placeholder="属性值（输入后回车），如 销售部"
+                    value={c.values}
+                    onChange={(v: string[]) => {
+                      const next = [...aclClaims];
+                      next[i] = { ...next[i], values: v };
+                      setAclClaims(next);
+                    }}
+                    options={[]}
+                    open={false}
+                  />
+                  <Button
+                    size="small"
+                    type="text"
+                    onClick={() => setAclClaims(aclClaims.filter((_, j) => j !== i))}
+                  >
+                    删
+                  </Button>
+                </Space>
+              ))}
+              <Button size="small" type="dashed" onClick={() => setAclClaims([...aclClaims, { key: "", values: [] }])}>
+                添加属性条件
+              </Button>
+              <Typography.Text style={{ fontSize: 12, display: "block" }}>
+                高级：终端用户 ID 白名单（与属性条件任一命中即可见）
+              </Typography.Text>
+              <Input.TextArea
+                rows={2}
+                value={aclUsers}
+                onChange={(e) => setAclUsers(e.target.value)}
+                placeholder="终端用户 ID，逗号分隔（可选，一般用属性声明就够了）"
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                受限生效后：挂件检索会过滤该文档（含 BM25 与向量）；知识图谱事实不参与过滤，敏感文档所在库建议关闭 KG 增强
+              </Typography.Text>
+            </>
           )}
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            受限生效后：挂件检索会过滤该文档（含 BM25 与向量）；知识图谱事实不参与过滤，敏感文档所在库建议关闭 KG 增强
-          </Typography.Text>
         </Space>
       </Modal>
 
@@ -317,9 +391,34 @@ export default function KBDetail() {
         <List
           dataSource={chunks || []}
           renderItem={(c: any) => (
-            <List.Item>
+            <List.Item
+              actions={[
+                <Button
+                  key="acl"
+                  size="small"
+                  onClick={() => {
+                    setAclChunk(c);
+                    const m = c.acl?.mode || "inherit";
+                    setChunkAclMode(m === "public" || m === "restricted" ? m : "inherit");
+                    setChunkAclUsers((c.acl?.end_users || []).join(", "));
+                    setChunkAclClaims(c.acl?.claims || []);
+                  }}
+                >
+                  权限
+                </Button>,
+              ]}
+            >
               <List.Item.Meta
-                title={`#${c.seq} · ~${c.token_count} tokens${c.meta?.heading ? ` · ${c.meta.heading}` : ""}`}
+                title={
+                  <Space size={6}>
+                    <span>{`#${c.seq} · ~${c.token_count} tokens${c.meta?.heading ? ` · ${c.meta.heading}` : ""}`}</span>
+                    {!c.acl && <Tag style={{ fontSize: 11 }}>继承文档</Tag>}
+                    {c.acl?.mode === "public" && <Tag color="green" style={{ fontSize: 11 }}>块公开</Tag>}
+                    {c.acl?.mode === "restricted" && (
+                      <Tag color="purple" style={{ fontSize: 11 }}>块受限</Tag>
+                    )}
+                  </Space>
+                }
                 description={
                   <Typography.Paragraph ellipsis={{ rows: 4 }} style={{ marginBottom: 0 }}>
                     {c.content}
@@ -330,6 +429,84 @@ export default function KBDetail() {
           )}
         />
       </Drawer>
+
+      <Modal
+        title={`分块权限 - #${aclChunk?.seq ?? ""}`}
+        open={!!aclChunk}
+        onCancel={() => setAclChunk(null)}
+        onOk={() =>
+          chunkAclSave.mutate({
+            id: aclChunk!.id,
+            mode: chunkAclMode,
+            users: chunkAclUsers.split(/[,，\s]+/).filter(Boolean),
+            claims: chunkAclClaims.filter((c) => c.key.trim() && c.values.length),
+          })
+        }
+        confirmLoading={chunkAclSave.isPending}
+        okText="保存"
+      >
+        <Space direction="vertical" style={{ width: "100%" }} size={12}>
+          <Radio.Group value={chunkAclMode} onChange={(e) => setChunkAclMode(e.target.value)}>
+            <Radio value="inherit">继承文档规则（默认）</Radio>
+            <Radio value="public">块级公开（覆盖文档限制，摘录例外用）</Radio>
+            <Radio value="restricted">块级受限（公开文档里封锁这段）</Radio>
+          </Radio.Group>
+          {chunkAclMode === "restricted" && (
+            <>
+              <Typography.Text style={{ fontSize: 12 }}>属性声明条件（多条件需同时满足）</Typography.Text>
+              {chunkAclClaims.map((c, i) => (
+                <Space key={i} style={{ display: "flex", marginBottom: 4 }} wrap>
+                  <Input
+                    style={{ width: 140 }}
+                    placeholder="属性名，如 dept"
+                    value={c.key}
+                    onChange={(e) => {
+                      const next = [...chunkAclClaims];
+                      next[i] = { ...next[i], key: e.target.value };
+                      setChunkAclClaims(next);
+                    }}
+                  />
+                  <Select
+                    mode="tags"
+                    style={{ width: 260 }}
+                    placeholder="属性值（输入后回车）"
+                    value={c.values}
+                    onChange={(v: string[]) => {
+                      const next = [...chunkAclClaims];
+                      next[i] = { ...next[i], values: v };
+                      setChunkAclClaims(next);
+                    }}
+                    options={[]}
+                    open={false}
+                  />
+                  <Button
+                    size="small"
+                    type="text"
+                    onClick={() => setChunkAclClaims(chunkAclClaims.filter((_, j) => j !== i))}
+                  >
+                    删
+                  </Button>
+                </Space>
+              ))}
+              <Button size="small" type="dashed" onClick={() => setChunkAclClaims([...chunkAclClaims, { key: "", values: [] }])}>
+                添加属性条件
+              </Button>
+              <Typography.Text style={{ fontSize: 12, display: "block" }}>
+                高级：终端用户 ID 白名单
+              </Typography.Text>
+              <Input.TextArea
+                rows={2}
+                value={chunkAclUsers}
+                onChange={(e) => setChunkAclUsers(e.target.value)}
+                placeholder="终端用户 ID，逗号分隔（可选）"
+              />
+            </>
+          )}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            覆盖模式：块规则设置后该块可见性完全由块规则决定（不再看文档规则）；「继承文档」恢复默认
+          </Typography.Text>
+        </Space>
+      </Modal>
     </Space>
   );
 }
