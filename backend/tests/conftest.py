@@ -103,6 +103,7 @@ async def sqlite_env(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("app.services.ingestion.pipeline.get_llm_client", lambda: fake_llm)
     monkeypatch.setattr("app.services.retrieval.get_embedding_client", lambda: fake_embed)
+    monkeypatch.setattr("app.services.cache.get_embedding_client", lambda: fake_embed)
     monkeypatch.setattr("app.services.chat.orchestrator.get_llm_client", lambda *_: fake_llm)
     monkeypatch.setattr(
         "app.services.kg.extractor.get_llm_client", lambda *_: fake_llm

@@ -6,6 +6,7 @@
 """
 
 import json
+import logging
 import math
 import re
 import time
@@ -28,6 +29,8 @@ from app.services.tools import (
     sql_schema_companion,
     to_openai_tools,
 )
+
+logger = logging.getLogger(__name__)
 
 TOOL_MAX_ROUNDS = 2
 
@@ -335,6 +338,39 @@ async def run_chat(
     config = app.retrieval_config or {}
     llm = get_llm_client(app.llm_config)
 
+    # 0. 预算熔断：当日/当月 token 用量超应用配置预算时直接拒绝（成本保护）
+    budget = (config or {}).get("budget") or {}
+    if isinstance(budget, dict) and (budget.get("daily_tokens") or budget.get("monthly_tokens")):
+        from sqlalchemy import func, select as sa_select
+
+        now_utc = datetime.now(timezone.utc)
+        day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = day_start.replace(day=1)
+        if budget.get("daily_tokens"):
+            daily_used = (
+                await session.execute(
+                    sa_select(func.coalesce(func.sum(UsageEvent.tokens_in + UsageEvent.tokens_out), 0)).where(
+                        UsageEvent.app_id == app.id, UsageEvent.created_at >= day_start
+                    )
+                )
+            ).scalar_one()
+            if daily_used >= int(budget["daily_tokens"]):
+                yield {"type": "error",
+                       "message": "本应用已达到今日 token 预算上限，请明天再试或联系管理员调整预算。"}
+                return
+        if budget.get("monthly_tokens"):
+            monthly_used = (
+                await session.execute(
+                    sa_select(func.coalesce(func.sum(UsageEvent.tokens_in + UsageEvent.tokens_out), 0)).where(
+                        UsageEvent.app_id == app.id, UsageEvent.created_at >= month_start
+                    )
+                )
+            ).scalar_one()
+            if monthly_used >= int(budget["monthly_tokens"]):
+                yield {"type": "error",
+                       "message": "本应用已达到本月 token 预算上限，请联系管理员调整预算。"}
+                return
+
     # 1. 意图路由
     intent = "qa"
     if config.get("intent_route", True):
@@ -344,10 +380,40 @@ async def run_chat(
     # 2. 会话记忆压缩（摘要 + 最近N轮，§十五混合策略）
     history_eff = await _compress_history(llm, history)
 
-    # 3. 检索（qa）：先改写 query（§十六），检索用改写结果、回答针对原始问题
+    # 3. 语义缓存快速路径（qa、无工具、非审核）：命中则跳过检索与生成，直接复用回答
+    review_mode = (config or {}).get("review_mode") == "on"
+    tools = await get_app_tools(session, app.id)
     context, citations, hit = "", [], False
     graph_fact_count = 0
-    if intent == "qa":
+    cache_answer: str | None = None
+    cached_hit = False
+    if intent == "qa" and str(config.get("cache_mode") or "off") == "on" and not tools and not review_mode:
+        from app.services import cache as sema_cache
+
+        cached = await sema_cache.lookup(
+            app.id,
+            question,
+            float(config.get("cache_threshold") or 0.92),
+            int(config.get("cache_ttl") or 3600),
+        )
+        if cached and (cached.get("answer") or "").strip():
+            cache_answer = cached["answer"]
+            citations = cached.get("citations") or []
+            hit = True
+            cached_hit = True
+            yield {
+                "type": "retrieval",
+                "chunks": len(citations),
+                "graph_facts": 0,
+                "hit": True,
+                "query": question,
+                "cached": True,
+            }
+            yield {"type": "delta", "content": cache_answer}
+            yield {"type": "citations", "citations": citations}
+
+    # 检索（qa，缓存未命中时）：先改写 query（§十六），检索用改写结果、回答针对原始问题
+    if intent == "qa" and cache_answer is None:
         search_query = await _rewrite_query(llm, question, history_eff)
         kbs = await get_app_knowledge_bases(session, app.id)
         if kbs:
@@ -381,14 +447,11 @@ async def run_chat(
     answer_parts: list[str] = []
     usage: dict = {}
     cards: list[dict] = []  # 本轮工具产生的 UI 卡片（随消息持久化，挂件渲染）
-    tools = await get_app_tools(session, app.id)
     tool_ctx = {"end_user": end_user or {}, "metadata": metadata or {}}
+    used_tools = False  # 语义缓存写入门控：本轮发生过工具调用则不缓存
 
     # 人工审批门：工具配置 require_approval=true 时拦截真执行，落审批单人拍板（形态①）
     approval = ApprovalGate(session, app.id, conversation_id, tool_ctx)
-    # 人工审核模式（形态④）：回答缓冲不直接下发，落 pending 消息等人在控制台放行
-    review_mode = (config or {}).get("review_mode") == "on"
-
     # 工具循环轮数：应用级配置（默认 2，钳 1..6）
     lo, hi = TOOL_ROUNDS_LIMIT
     tool_rounds = max(lo, min(int(config.get("tool_rounds") or TOOL_MAX_ROUNDS), hi))
@@ -396,7 +459,11 @@ async def run_chat(
     # 多 agent 模式（架构先行，默认 single 走原有单 agent 路径，零行为变化）：
     # agent_config = {"mode": "planner_workers", "workers": [{name, system_prompt, tool_names, max_rounds}]}
     agent_cfg = config.get("agent_config") or {}
-    if agent_cfg.get("mode") == "planner_workers" and tools:
+
+    if cache_answer is not None:
+        answer_parts.append(cache_answer)
+        usage = {"tokens_in": 0, "tokens_out": 0}
+    elif agent_cfg.get("mode") == "planner_workers" and tools:
         from app.services.agents import planner_workers
 
         async for event in planner_workers(
@@ -404,6 +471,8 @@ async def run_chat(
             temperature=temperature, max_tokens=max_tokens, ctx=tool_ctx,
             approval=approval,
         ):
+            if event["type"] == "tool_call":
+                used_tools = True
             if event["type"] == "delta":
                 answer_parts.append(event["content"])
                 if not review_mode:
@@ -423,6 +492,8 @@ async def run_chat(
             llm, messages, tools, temperature, max_tokens,
             ctx=tool_ctx, max_rounds=tool_rounds, approval=approval,
         ):
+            if event["type"] == "tool_call":
+                used_tools = True
             if event["type"] == "delta":
                 answer_parts.append(event["content"])
                 if not review_mode:
@@ -484,11 +555,30 @@ async def run_chat(
             tokens_out=usage.get("tokens_out", 0),
             latency_ms=latency_ms,
             hit=hit,
+            cached=cached_hit,
         )
     )
     if conversation and conversation.title == "新对话":
         conversation.title = question[:100]
     await session.commit()
+
+    # 语义缓存写入：qa、开启、本轮无工具调用、检索命中、非审核模式、非缓存命中
+    if (
+        intent == "qa"
+        and str(config.get("cache_mode") or "off") == "on"
+        and not used_tools
+        and hit
+        and not review_mode
+        and not cached_hit
+        and answer.strip()
+        and "没有相关资料" not in answer
+    ):
+        try:
+            from app.services import cache as sema_cache
+
+            await sema_cache.write(app.id, question, answer, citations)
+        except Exception as e:  # noqa: BLE001 缓存失败不影响主链路
+            logger.warning("semantic cache write failed: %s", e)
 
     # 审核模式：回答已落 pending，通知审核侧；引用随消息一起等放行后再可见
     if assistant_msg.review_status == "pending":

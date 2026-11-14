@@ -251,6 +251,61 @@ function ConfigForm({
             <Switch />
           </Form.Item>
         </Col>
+        <Col span={24}>
+          <Typography.Text strong>语义缓存与成本预算</Typography.Text>
+        </Col>
+        <Col span={6}>
+          <Form.Item
+            name={["retrieval_config", "cache_mode"]}
+            label="语义缓存"
+            valuePropName="checked"
+            getValueProps={(v) => ({ checked: v === "on" })}
+            normalize={(checked) => (checked ? "on" : "off")}
+            tooltip="相似问题直接复用上次的回答（不再检索与生成），大幅节省 token 与延迟。只对知识问答且未配置业务工具的应用生效；知识库更新后建议先关闭缓存等新答案产生。"
+            extra={<span style={{ fontSize: 12 }}>默认关</span>}
+          >
+            <Switch />
+          </Form.Item>
+        </Col>
+        <Col span={6}>
+          <Form.Item
+            name={["retrieval_config", "cache_ttl"]}
+            label="缓存有效期(秒)"
+            extra={<span style={{ fontSize: 12 }}>默认 3600（1 小时）</span>}
+          >
+            <InputNumber min={60} max={86400} style={{ width: "100%" }} />
+          </Form.Item>
+        </Col>
+        <Col span={6}>
+          <Form.Item
+            name={["retrieval_config", "cache_threshold"]}
+            label="相似度阈值"
+            tooltip="问题向量相似度超过该阈值才视为同一问题（0.8~0.99，越高越严格，默认 0.92）"
+            extra={<span style={{ fontSize: 12 }}>默认 0.92</span>}
+          >
+            <InputNumber min={0.8} max={0.99} step={0.01} style={{ width: "100%" }} />
+          </Form.Item>
+        </Col>
+        <Col span={6}>
+          <Form.Item
+            name={["retrieval_config", "budget", "daily_tokens"]}
+            label="每日 Token 预算"
+            tooltip="当日该应用的输入+输出 token 总量超过预算后，新提问会被拒绝并提示联系管理员。0 = 不限"
+            extra={<span style={{ fontSize: 12 }}>0 = 不限</span>}
+          >
+            <InputNumber min={0} step={10000} style={{ width: "100%" }} />
+          </Form.Item>
+        </Col>
+        <Col span={6}>
+          <Form.Item
+            name={["retrieval_config", "budget", "monthly_tokens"]}
+            label="每月 Token 预算"
+            extra={<span style={{ fontSize: 12 }}>0 = 不限</span>}
+          >
+            <InputNumber min={0} step={100000} style={{ width: "100%" }} />
+          </Form.Item>
+        </Col>
+
       </Row>
       <Form.Item
         name={["retrieval_config", "use_bm25"]}
@@ -929,7 +984,7 @@ export default function Apps() {
     // 旧数据可能缺某个检索参数：与默认值合并，避免表单显示空、保存时丢字段
     const rawRc = detail.retrieval_config || {};
     const { agent_config: agentCfg, ...rcRest } = rawRc;
-    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", review_mode: "off", ...rcRest };
+    const rc = { top_k: 5, use_kg: true, kg_hops: 1, kg_top_entities: 3, history_window: 12, tool_rounds: 2, intent_route: true, use_bm25: true, rerank: "none", review_mode: "off", cache_mode: "off", cache_ttl: 3600, cache_threshold: 0.92, budget: { daily_tokens: 0, monthly_tokens: 0 }, ...rcRest };
     form.setFieldsValue({
       ...detail,
       retrieval_config: rc,

@@ -373,6 +373,8 @@ class DashboardOverview(BaseModel):
     total_relations: int
     total_apps: int
     total_kbs: int
+    cached_chats: int = 0  # 语义缓存命中次数
+    cached_tokens: int = 0  # 缓存命中的对话不再消耗的 token 估算
 
 
 class TimeseriesPoint(BaseModel):

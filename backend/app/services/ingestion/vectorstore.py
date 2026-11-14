@@ -65,12 +65,23 @@ class VectorStore:
         vector: list[float],
         top_k: int = 5,
         score_threshold: float = 0.0,
+        payload_filter: dict | None = None,
     ) -> list[VectorHit]:
+        """payload_filter: {字段: 值} 精确匹配（语义缓存按 app_id 隔离用）。"""
+        qfilter = None
+        if payload_filter:
+            qfilter = qm.Filter(
+                must=[
+                    qm.FieldCondition(key=k, match=qm.MatchValue(value=v))
+                    for k, v in payload_filter.items()
+                ]
+            )
         resp = await self.client.query_points(
             collection_name=collection_name(kb_id),
             query=vector,
             limit=top_k,
             score_threshold=score_threshold or None,
+            query_filter=qfilter,
             with_payload=True,
         )
         return [
@@ -92,6 +103,20 @@ class VectorStore:
                         qm.FieldCondition(
                             key="document_id", match=qm.MatchValue(value=str(document_id))
                         )
+                    ]
+                )
+            ),
+        )
+
+    async def delete_by_payload(self, kb_id: uuid.UUID, payload_filter: dict) -> None:
+        """按 payload 精确匹配删除（语义缓存过期清理用）。"""
+        await self.client.delete(
+            collection_name=collection_name(kb_id),
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(
+                    must=[
+                        qm.FieldCondition(key=k, match=qm.MatchValue(value=v))
+                        for k, v in payload_filter.items()
                     ]
                 )
             ),

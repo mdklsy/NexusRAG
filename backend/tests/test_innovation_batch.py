@@ -442,3 +442,98 @@ async def test_widget_card_flow(sqlite_env, monkeypatch):
         assert r.status_code == 200
         m = [x for x in r.json() if x["role"] == "assistant"][0]
         assert m["cards"] and m["cards"][0]["card_type"] == "stats"
+
+
+class CountingStreamLLM:
+    """流式回答计数器（语义缓存命中时第二次不应再调）。"""
+
+    def __init__(self):
+        self.stream_calls = 0
+
+    async def chat_stream(self, messages, temperature=0.3, max_tokens=2048):
+        self.stream_calls += 1
+        yield "全国包邮，顺丰发出。", None
+        yield "", {"tokens_in": 9, "tokens_out": 6}
+
+    async def chat(self, messages, temperature=0.3, max_tokens=2048):
+        return "全国包邮，顺丰发出。", {"tokens_in": 9, "tokens_out": 6}
+
+    async def chat_json(self, messages, temperature=0.0, max_tokens=4096):
+        return '{"intent": "qa"}'
+
+    async def chat_with_tools(self, messages, tools, temperature=0.3, max_tokens=2048):
+        return "回答", None, {"tokens_in": 5, "tokens_out": 3}
+
+
+async def test_semantic_cache_roundtrip(sqlite_env, monkeypatch):
+    """同问两次：第二次走缓存（不再调 LLM），UsageEvent 记 cached=True。"""
+    from app.services.chat import orchestrator
+    from app.services.chat.orchestrator import run_chat
+
+    kb_id, _id1, _id2 = await _mk_acl_kb()
+    app_id, conv_id, _token = await _mk_env(
+        retrieval_config={
+            "cache_mode": "on", "cache_ttl": 3600, "cache_threshold": 0.8,
+            "score_threshold": 0,
+        }
+    )
+    from sqlalchemy import update as sa_update
+
+    from app.db.session import session_scope as ss
+    from app.models.app import AppKnowledgeBase
+    async with ss() as session:
+        await session.execute(sa_update(App).where(App.id == app_id).values(
+            retrieval_config={"intent_route": False, "cache_mode": "on",
+                              "cache_ttl": 3600, "cache_threshold": 0.8, "score_threshold": 0}
+        ))
+        session.add(AppKnowledgeBase(app_id=app_id, kb_id=kb_id))
+        await session.commit()
+
+    llm = CountingStreamLLM()
+    monkeypatch.setattr(orchestrator, "get_llm_client", lambda *_: llm)
+
+    async with ss() as session:
+        app_row = await session.get(App, app_id)
+        async for _ev in run_chat(session, app_row, conv_id, "包邮吗", []):
+            pass
+    assert llm.stream_calls == 1
+
+    async with ss() as session:
+        app_row = await session.get(App, app_id)
+        async for ev in run_chat(session, app_row, conv_id, "包邮吗", []):
+            if ev["type"] == "retrieval":
+                assert ev.get("cached") is True
+    assert llm.stream_calls == 1  # 第二次未调 LLM
+
+    from app.models.app import UsageEvent
+    async with ss() as session:
+        usages = list((await session.execute(select(UsageEvent))).scalars().all())
+        assert len(usages) == 2
+        assert usages[0].cached is False and usages[1].cached is True
+
+
+async def test_budget_exceeded_blocks_chat(sqlite_env, monkeypatch):
+    """超当日预算：error 事件直接熔断，不调 LLM。"""
+    from app.services.chat import orchestrator
+    from app.services.chat.orchestrator import run_chat
+
+    app_id, conv_id, _token = await _mk_env(
+        retrieval_config={"budget": {"daily_tokens": 1, "monthly_tokens": 0}}
+    )
+    llm = CountingStreamLLM()
+    monkeypatch.setattr(orchestrator, "get_llm_client", lambda *_: llm)
+
+    from app.db.session import session_scope as ss
+    from app.models.app import UsageEvent
+    async with ss() as session:
+        session.add(UsageEvent(app_id=app_id, type="chat",
+                               tokens_in=500, tokens_out=500))
+        await session.commit()
+
+    events = []
+    async with ss() as session:
+        app_row = await session.get(App, app_id)
+        async for ev in run_chat(session, app_row, conv_id, "你好", []):
+            events.append(ev)
+    assert any(e["type"] == "error" and "预算" in e.get("message", "") for e in events)
+    assert llm.stream_calls == 0

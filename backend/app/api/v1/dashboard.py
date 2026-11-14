@@ -46,6 +46,14 @@ async def overview(
         )
     ).one()
     total_chats, hit_count = int(hits[0] or 0), int(hits[1] or 0)
+    cached = (
+        await session.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(UsageEvent.tokens_in + UsageEvent.tokens_out), 0),
+            ).where(UsageEvent.created_at >= since, UsageEvent.type == "chat", UsageEvent.cached.is_(True))
+        )
+    ).one()
 
     async def count(model, *conds) -> int:
         return int(
@@ -65,6 +73,8 @@ async def overview(
         total_relations=await count(Relation),
         total_apps=await count(App),
         total_kbs=await count(KnowledgeBase),
+        cached_chats=int(cached[0] or 0),
+        cached_tokens=int(cached[1] or 0),
     )
 
 

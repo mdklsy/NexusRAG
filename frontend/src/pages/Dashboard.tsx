@@ -60,6 +60,12 @@ export default function Dashboard() {
             <Col span={4}>
               <Statistic title="Token 输出" value={ov?.total_tokens_out ?? 0} />
             </Col>
+            <Col span={4}>
+              <Statistic title="缓存命中（30天）" value={ov?.cached_chats ?? 0} />
+            </Col>
+            <Col span={4}>
+              <Statistic title="缓存节省 Token" value={ov?.cached_tokens ?? 0} />
+            </Col>
           </Row>
         </Card>
       </Col>
