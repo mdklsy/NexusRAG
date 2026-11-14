@@ -154,11 +154,11 @@ async def test_cannot_demote_last_admin(sqlite_env):
 def test_eval_parse_scores_and_hit():
     from app.services.evaluator import check_hit, parse_scores
 
-    assert parse_scores('{"faithfulness": 5, "relevance": 4}') == (5.0, 4.0)
-    assert parse_scores('```json\n{"faithfulness": 2, "relevance": 3}\n```') == (2.0, 3.0)
-    assert parse_scores("垃圾 [3]") == (None, None) or parse_scores("垃圾") == (None, None)
+    assert parse_scores('{"faithfulness": 5, "relevance": 4}') == (5.0, 4.0, 5.0)
+    assert parse_scores('```json\n{"faithfulness": 2, "relevance": 3}\n```') == (2.0, 3.0, 5.0)
+    assert parse_scores("垃圾") == (None, None, None)
     # 分数越界收敛到 1-5
-    assert parse_scores('{"faithfulness": 9, "relevance": 0}') == (5.0, 1.0)
+    assert parse_scores('{"faithfulness": 9, "relevance": 0}') == (5.0, 1.0, 5.0)
 
     assert check_hit("", ["a.md"]) is None
     assert check_hit("退款政策.md", ["退款政策.md", "x"]) is True

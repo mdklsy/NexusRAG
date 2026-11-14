@@ -9,6 +9,7 @@ import {
   Row,
   Select,
   Space,
+  Popover,
   Statistic,
   Table,
   Tag,
@@ -37,13 +38,16 @@ interface RunDetail {
   done: number;
   avg_faithfulness: number | null;
   avg_relevance: number | null;
+  avg_context_sufficiency?: number | null;
   hit_rate: number | null;
   error: string | null;
   results: {
     question: string;
     answer: string;
     retrieved_doc_names: string[];
+    diagnosis?: { cause: string; detail: string; suggestion: string } | null;
     faithfulness: number | null;
+    context_sufficiency?: number | null;
     relevance: number | null;
     hit: boolean | null;
     elapsed_ms: number;
@@ -122,6 +126,14 @@ export default function Evals() {
     failed: ["error", "失败"],
   };
 
+const DIAG_CAUSE: Record<string, { color: string; text: string }> = {
+  no_recall: { color: "red", text: "召回为空" },
+  recall_miss: { color: "red", text: "期望文档未召回" },
+  ranking: { color: "orange", text: "排序靠后" },
+  context_gap: { color: "orange", text: "资料不足" },
+  generation: { color: "purple", text: "生成问题" },
+};
+
   return (
     <Space direction="vertical" style={{ width: "100%" }} size={16}>
       <Card
@@ -197,24 +209,30 @@ export default function Evals() {
             <Typography.Paragraph type="danger">{run.error}</Typography.Paragraph>
           )}
           <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col span={6}>
+            <Col span={5}>
               <Statistic
                 title="忠实度 (1-5)"
                 value={run.avg_faithfulness?.toFixed(2) ?? "—"}
                 suffix={run.avg_faithfulness ? "/ 5" : ""}
               />
             </Col>
-            <Col span={6}>
+            <Col span={5}>
               <Statistic title="相关性 (1-5)" value={run.avg_relevance?.toFixed(2) ?? "—"} />
             </Col>
-            <Col span={6}>
+            <Col span={5}>
+              <Statistic
+                title="资料充分度 (1-5)"
+                value={run.avg_context_sufficiency?.toFixed(2) ?? "—"}
+              />
+            </Col>
+            <Col span={4}>
               <Statistic
                 title="文档命中率"
                 value={run.hit_rate != null ? (run.hit_rate * 100).toFixed(0) : "—"}
                 suffix={run.hit_rate != null ? "%" : ""}
               />
             </Col>
-            <Col span={6}>
+            <Col span={5}>
               <Statistic title="用例数" value={run.total} />
             </Col>
           </Row>
@@ -237,6 +255,33 @@ export default function Evals() {
                 dataIndex: "relevance",
                 width: 70,
                 render: (v) => (v != null ? v.toFixed(0) : "—"),
+              },
+              {
+                title: "诊断",
+                dataIndex: "diagnosis",
+                width: 110,
+                render: (d) => {
+                  if (!d?.cause) return "—";
+                  const meta = DIAG_CAUSE[d.cause] || { color: "default", text: d.cause };
+                  return (
+                    <Popover
+                      title="失败归因"
+                      content={
+                        <div style={{ maxWidth: 320 }}>
+                          <div>{d.detail}</div>
+                          <Typography.Paragraph
+                            type="secondary"
+                            style={{ marginBottom: 0, marginTop: 8, fontSize: 12 }}
+                          >
+                            修复建议：{d.suggestion}
+                          </Typography.Paragraph>
+                        </div>
+                      }
+                    >
+                      <Tag color={meta.color}>{meta.text}</Tag>
+                    </Popover>
+                  );
+                },
               },
               {
                 title: "命中",

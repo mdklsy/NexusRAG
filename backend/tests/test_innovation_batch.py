@@ -285,3 +285,83 @@ async def test_document_acl_chat_path(sqlite_env):
         cites = msgs[0].citations or []
         assert all(c.get("document_name") != "secret.md" for c in cites)
         assert msgs[0].hit is False or cites  # ACL 过滤后可能无命中
+
+
+class JudgeLLM:
+    """评测 judge：chat_json 返回三档分；chat 生成回答。"""
+
+    def __init__(self, scores: dict):
+        self.scores = scores
+
+    async def chat(self, messages, temperature=0.3, max_tokens=2048):
+        return "基于资料生成的回答", {"tokens_in": 10, "tokens_out": 5}
+
+    async def chat_json(self, messages, temperature=0.0, max_tokens=4096):
+        import json as _json
+        return _json.dumps(self.scores, ensure_ascii=False)
+
+    async def chat_stream(self, messages, temperature=0.3, max_tokens=2048):
+        yield "默认回答", None
+        yield "", {"tokens_in": 8, "tokens_out": 4}
+
+    async def chat_with_tools(self, messages, tools, temperature=0.3, max_tokens=2048):
+        return "回答", None, {"tokens_in": 5, "tokens_out": 3}
+
+
+async def test_eval_self_diagnosis(sqlite_env, monkeypatch):
+    """评测：retrieved_chunks/diagnosis 落库；无召回与资料不足两场景归因正确。"""
+    from app.services.chat import orchestrator as orch_mod
+    from app.services.evaluator import run_eval
+
+    kb_id, id1, id2 = await _mk_acl_kb()
+    app_id, conv_id, token = await _mk_env()
+    # 应用绑定 KB
+    from app.db.session import session_scope as ss
+    from app.models.app import AppKnowledgeBase
+    async with ss() as session:
+        session.add(AppKnowledgeBase(app_id=app_id, kb_id=kb_id))
+        await session.commit()
+
+    # 场景1：正常召回 + 资料充分度 2 → context_gap
+    judge = JudgeLLM({"faithfulness": 5, "relevance": 5, "context_sufficiency": 2})
+    monkeypatch.setattr("app.services.evaluator.get_llm_client", lambda *_: judge)
+    from app.models.eval import EvalCase, EvalResult, EvalRun, EvalSet
+    async with ss() as session:
+        es = EvalSet(app_id=app_id, name="自诊断")
+        session.add(es)
+        await session.flush()
+        session.add(EvalCase(eval_set_id=es.id, question="包邮",
+                             expected_points="", expected_doc_name="public.md"))
+        await session.flush()
+        run = EvalRun(eval_set_id=es.id, status="pending", total=1)
+        session.add(run)
+        await session.commit()
+        run_id = run.id
+    await run_eval(run_id)
+
+    async with ss() as session:
+        r = (await session.execute(select(EvalResult).where(EvalResult.run_id == run_id))).scalars().first()
+        assert r.diagnosis and r.diagnosis["cause"] == "context_gap"
+        assert r.retrieved_chunks and r.retrieved_chunks[0]["document_name"] == "public.md"
+        assert r.context_sufficiency == 2.0
+        run = await session.get(EvalRun, run_id)
+        assert run.avg_context_sufficiency == 2.0
+
+    # 场景2：期望文档名不匹配 → recall_miss
+    judge2 = JudgeLLM({"faithfulness": 5, "relevance": 4, "context_sufficiency": 4})
+    monkeypatch.setattr("app.services.evaluator.get_llm_client", lambda *_: judge2)
+    async with ss() as session:
+        es2 = EvalSet(app_id=app_id, name="自诊断2")
+        session.add(es2)
+        await session.flush()
+        session.add(EvalCase(eval_set_id=es2.id, question="包邮",
+                             expected_points="", expected_doc_name="不存在.md"))
+        await session.flush()
+        run2 = EvalRun(eval_set_id=es2.id, status="pending", total=1)
+        session.add(run2)
+        await session.commit()
+        run2_id = run2.id
+    await run_eval(run2_id)
+    async with ss() as session:
+        r = (await session.execute(select(EvalResult).where(EvalResult.run_id == run2_id))).scalars().first()
+        assert r.diagnosis and r.diagnosis["cause"] == "recall_miss"

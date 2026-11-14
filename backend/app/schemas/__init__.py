@@ -225,6 +225,7 @@ class EvalRunOut(ORMModel):
     done: int
     avg_faithfulness: float | None
     avg_relevance: float | None
+    avg_context_sufficiency: float | None = None
     hit_rate: float | None
     error: str | None
     created_at: datetime
