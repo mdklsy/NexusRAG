@@ -23,20 +23,45 @@ router = APIRouter(tags=["chat"])
 SIG_TTL_SECONDS = 86400  # 页面后端每次渲染重新签发，签给出的票据按天有效
 
 
-def _verify_user_sig(app: App, end_user_id: str, ts: int, sig: str) -> None:
-    """校验页面后端签发的终端用户票据：HMAC-SHA256(secret, f"{end_user_id}:{ts}")。
+def _parse_attrs_param(attrs: str | None) -> dict | None:
+    """历史端点的 attrs 查询参数：URL-encoded JSON；解析失败直接 400。"""
+    if attrs is None or attrs == "":
+        return None
+    try:
+        parsed = json.loads(attrs)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, "attrs 参数必须是合法 JSON") from e
+    return parsed if isinstance(parsed, dict) else None
 
-    secret 存应用 widget_config.widget_secret（页面后端持有，绝不进前端）——
-    没有 secret 就无法为任意 end_user_id 伪造签名，历史会话因此按用户隔离。
+
+def _canonical_attrs(attrs: dict | None) -> str | None:
+    """attrs 参与签名的规范串（sort_keys + 紧凑分隔符，与页面后端约定一致）。"""
+    if attrs is None:
+        return None
+    return json.dumps(attrs, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _verify_user_sig(
+    app: App, end_user_id: str, ts: int, sig: str, attrs: dict | None = None
+) -> None:
+    """校验页面后端签发的终端用户票据。
+
+    无 attrs：HMAC-SHA256(secret, f"{end_user_id}:{ts}")（旧公式，兼容）；
+    有 attrs：HMAC-SHA256(secret, f"{end_user_id}:{ts}:{attrs_json规范串}")——
+    属性声明参与 ACL 授权，必须签名防浏览器端伪造。
+
+    secret 存应用 widget_config.widget_secret（页面后端持有，绝不进前端）。
     """
     secret = (app.widget_config or {}).get("widget_secret")
     if not secret:
         raise HTTPException(400, "应用未配置 widget_secret，无法使用终端用户历史")
     if abs(time.time() - ts) > SIG_TTL_SECONDS:
         raise HTTPException(401, "票据已过期，请刷新页面重新获取")
-    expected = hmac_mod.new(
-        secret.encode(), f"{end_user_id}:{ts}".encode(), hashlib.sha256
-    ).hexdigest()
+    base = f"{end_user_id}:{ts}"
+    canonical = _canonical_attrs(attrs)
+    if canonical is not None:
+        base = f"{base}:{canonical}"
+    expected = hmac_mod.new(secret.encode(), base.encode(), hashlib.sha256).hexdigest()
     if not hmac_mod.compare_digest(expected, sig):
         raise HTTPException(401, "终端用户票据校验失败")
 
@@ -72,6 +97,21 @@ async def chat_stream(
     app = await _resolve_principal(body, authorization, session)
     if not body.question:
         raise HTTPException(400, "消息不能为空")
+    # ACL v2 防伪：应用配置了 widget_secret 且请求携带属性声明 → 必须验签
+    # （浏览器端挂件不可信；纯服务端集成未配 widget_secret 则 nx- Key 即信任锚）
+    if body.end_user and body.end_user.attributes:
+        secret = (app.widget_config or {}).get("widget_secret")
+        if secret and not body.end_user.sig:
+            raise HTTPException(
+                401,
+                "本应用已配置挂件密钥：携带 end_user.attributes 声明必须提供签名"
+                "（sig/ts，签名串见集成文档），防止浏览器端伪造身份",
+            )
+        if secret and body.end_user.sig:
+            _verify_user_sig(
+                app, body.end_user.id, body.end_user.ts,
+                body.end_user.sig, body.end_user.attributes,
+            )
 
     # 会话：无则创建
     conversation_id = body.conversation_id
@@ -178,12 +218,13 @@ async def widget_conversations(
     end_user_id: str,
     ts: int,
     sig: str,
+    attrs: str | None = None,
     authorization: str = Header(default=""),
     session: AsyncSession = Depends(get_session),
 ):
     """按终端用户列其会话（nx- Key 认证 + 票据验签，防冒充他人拉历史）。"""
     app = await get_app_by_api_key(authorization=authorization, session=session)
-    _verify_user_sig(app, end_user_id, ts, sig)
+    _verify_user_sig(app, end_user_id, ts, sig, _parse_attrs_param(attrs))
     rows = (
         (
             await session.execute(
@@ -218,6 +259,7 @@ async def widget_messages(
     sig: str,
     limit: int = 30,
     before: uuid.UUID | None = None,
+    attrs: str | None = None,
     authorization: str = Header(default=""),
     session: AsyncSession = Depends(get_session),
 ):
@@ -229,7 +271,7 @@ async def widget_messages(
     """
     limit = max(1, min(limit, 100))
     app = await get_app_by_api_key(authorization=authorization, session=session)
-    _verify_user_sig(app, end_user_id, ts, sig)
+    _verify_user_sig(app, end_user_id, ts, sig, _parse_attrs_param(attrs))
     conv = await session.get(Conversation, conversation_id)
     if (
         conv is None

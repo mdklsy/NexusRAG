@@ -41,6 +41,9 @@ class InsightsLLM:
 
 
 async def _mk_env(retrieval_config=None):
+    import uuid as _uuid
+
+    admin_email = f"insights-admin-{_uuid.uuid4().hex[:8]}@test.local"
     async with session_scope() as session:
         app = App(
             name="洞察测试",
@@ -51,7 +54,7 @@ async def _mk_env(retrieval_config=None):
         await session.flush()
         conv = Conversation(app_id=app.id, end_user_id="u1", title="会话A")
         session.add(conv)
-        admin = User(email="insights-admin@test.local", name="a",
+        admin = User(email=admin_email, name="a",
                      hashed_password=hash_password("x"), role="admin")
         session.add(admin)
         await session.commit()
@@ -658,3 +661,90 @@ async def _login_token(client) -> str:
         session.add(admin)
         await session.commit()
         return create_access_token(str(admin.id))
+
+
+def _sign(secret: str, payload: str) -> str:
+    import hashlib
+    import hmac as hm
+
+    return hm.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+async def test_acl_v2_signed_attributes(sqlite_env):
+    """签名边界：带 attributes + 合法签名放行；无签名 401；旧公式兼容；纯 API 无签名放行。"""
+    import hashlib
+    import hmac as hm
+    import time as tm
+
+    from app.core.security import generate_api_key
+    from app.models.platform import ApiKey
+    from app.models.app import App
+
+    # 三个应用：有 widget_secret（签名要求）+ 无 widget_secret（纯 API）
+    app_id_s, conv_s, token = await _mk_env()
+    app_id_p, conv_p, _ = await _mk_env()
+    async with session_scope() as session:
+        a1 = await session.get(App, app_id_s)
+        wc = dict(a1.widget_config or {}); wc["widget_secret"] = "sec-acl2"
+        a1.widget_config = wc
+        await session.commit()
+
+    from app.main import app as fastapi_app
+
+    async with session_scope() as session:
+        key_s, _h = generate_api_key()
+        session.add(ApiKey(app_id=app_id_s, name="ks", key_hash=_h, scope="chat"))
+        key_p, _h2 = generate_api_key()
+        session.add(ApiKey(app_id=app_id_p, name="kp", key_hash=_h2, scope="chat"))
+        await session.commit()
+
+    attrs = {"dept": "销售部"}
+    canonical = json.dumps(attrs, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    ts = int(tm.time())
+    sig = _sign("sec-acl2", f"e2e:{ts}:{canonical}")
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://t") as client:
+        body = {"query": "你好", "end_user": {"id": "e2e", "name": "e2e",
+                                              "attributes": attrs, "sig": sig, "ts": ts}}
+        # 1) 有签名 → 放行（无 KB，hit=False 走到生成）
+        r = await client.post("/api/v1/chat/stream", headers={"Authorization": f"Bearer {key_s}"},
+                              json=body)
+        assert r.status_code == 200 and "error" not in r.text
+
+        # 2) 同应用无签名 → 401 防伪
+        bad = dict(body); bad["end_user"] = {"id": "e2e", "attributes": attrs}
+        r = await client.post("/api/v1/chat/stream", headers={"Authorization": f"Bearer {key_s}"},
+                              json=bad)
+        assert r.status_code == 401 and "签名" in r.json()["detail"]
+
+        # 3) 纯 API 应用（无 widget_secret）→ attributes 无签名放行
+        r = await client.post("/api/v1/chat/stream", headers={"Authorization": f"Bearer {key_p}"},
+                              json={"query": "你好", "end_user": {"id": "e2e", "attributes": attrs}})
+        assert r.status_code == 200 and "error" not in r.text
+
+        # 4) 历史端点旧公式兼容（无 attrs）+ attrs 签名公式
+        secret = "sec-acl2"
+        ts2 = int(tm.time())
+        legacy = _sign(secret, f"e2e:{ts2}")
+        r = await client.get(
+            f"/api/v1/chat/conversations?end_user_id=e2e&ts={ts2}&sig={legacy}",
+            headers={"Authorization": f"Bearer {key_s}"})
+        assert r.status_code == 200
+        signed_attrs = _sign(secret, f"e2e:{ts2}:{canonical}")
+        r = await client.get(
+            f"/api/v1/chat/conversations?end_user_id=e2e&ts={ts2}&sig={signed_attrs}"
+            f"&attrs={httpx_query_escape(canonical)}",
+            headers={"Authorization": f"Bearer {key_s}"})
+        assert r.status_code == 200
+        wrong = _sign(secret, f"e2e:{ts2}")  # 未覆盖 attrs 的旧签名 → 拒绝
+        r = await client.get(
+            f"/api/v1/chat/conversations?end_user_id=e2e&ts={ts2}&sig={wrong}"
+            f"&attrs={httpx_query_escape(canonical)}",
+            headers={"Authorization": f"Bearer {key_s}"})
+        assert r.status_code == 401
+
+
+def httpx_query_escape(v: str) -> str:
+    from urllib.parse import quote
+
+    return quote(v, safe="")

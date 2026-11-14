@@ -38,6 +38,8 @@
     userName: scriptEl ? scriptEl.getAttribute("data-user-name") || "" : "",
     sig: scriptEl ? scriptEl.getAttribute("data-sig") || "" : "",
     ts: scriptEl ? Number(scriptEl.getAttribute("data-ts")) || 0 : 0,
+    // 属性声明（ACL v2）：data-attrs = JSON 字符串（页面后端签发，sig 需覆盖它）
+    attrs: scriptEl ? scriptEl.getAttribute("data-attrs") || "" : "",
     metadata: null, // 业务参数（token/order_id 等），仅服务端可见，不进 Prompt
   };
 
@@ -105,7 +107,13 @@
         conversation_id: state.conversationId,
         query: question,
         end_user: state.cfg.userId
-          ? { id: state.cfg.userId, name: state.cfg.userName || "" }
+          ? {
+              id: state.cfg.userId,
+              name: state.cfg.userName || "",
+              attributes: state.cfg.attrs ? JSON.parse(state.cfg.attrs) : undefined,
+              sig: state.cfg.sig || "",
+              ts: state.cfg.ts || 0,
+            }
           : undefined,
         metadata: state.cfg.metadata || undefined,
       }),
@@ -374,11 +382,12 @@
   // 服务端验签后按 end_user_id 隔离返回，挂件拿不到别人的会话。
 
   function authQuery() {
-    return (
+    var q =
       "end_user_id=" + encodeURIComponent(state.cfg.userId || "") +
       "&ts=" + (state.cfg.ts || 0) +
-      "&sig=" + encodeURIComponent(state.cfg.sig || "")
-    );
+      "&sig=" + encodeURIComponent(state.cfg.sig || "");
+    if (state.cfg.attrs) q += "&attrs=" + encodeURIComponent(state.cfg.attrs);
+    return q;
   }
 
   function authHeaders() {
@@ -693,7 +702,7 @@
     // 页面全局配置可覆盖 data-*（适合页面动态拿到票据后注入再初始化）：
     // window.NexusChatConfig = { userId, userName, sig, ts, metadata }
     var g = window.NexusChatConfig || {};
-    ["userId", "userName", "sig", "ts", "metadata"].forEach(function (k3) {
+    ["userId", "userName", "sig", "ts", "attrs", "metadata"].forEach(function (k3) {
       if (g[k3] !== undefined && g[k3] !== null && g[k3] !== "") state.cfg[k3] = g[k3];
     });
     if (!state.cfg.metadata && window.NexusChatMetadata) state.cfg.metadata = window.NexusChatMetadata;
