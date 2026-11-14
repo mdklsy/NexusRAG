@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app.core.security import create_access_token, hash_password
 from app.db.session import session_scope
-from app.models.app import App, Conversation, KnowledgeGap, Message, ReviewDecision
+from app.models.app import App, Conversation, KnowledgeGap, Message, ReviewDecision, Tool
 from app.models.eval import EvalCase, EvalSet
 from app.models.platform import User
 
@@ -365,3 +365,80 @@ async def test_eval_self_diagnosis(sqlite_env, monkeypatch):
     async with ss() as session:
         r = (await session.execute(select(EvalResult).where(EvalResult.run_id == run2_id))).scalars().first()
         assert r.diagnosis and r.diagnosis["cause"] == "recall_miss"
+
+
+class CardToolLLM:
+    """第一轮调工具（返回 nexus_card JSON），第二轮直接作答。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat_json(self, messages, temperature=0.0, max_tokens=4096):
+        return '{"intent": "qa"}'
+
+    async def chat_with_tools(self, messages, tools, temperature=0.3, max_tokens=2048):
+        self.calls += 1
+        if self.calls == 1:
+            return "", [{"id": "c1", "name": "order_stats", "arguments": "{}"}], {
+                "tokens_in": 20, "tokens_out": 5,
+            }
+        return "订单情况如下。", None, {"tokens_in": 10, "tokens_out": 5}
+
+    async def chat(self, messages, temperature=0.3, max_tokens=2048):
+        return "说明", {"tokens_in": 5, "tokens_out": 3}
+
+    async def chat_stream(self, messages, temperature=0.3, max_tokens=2048):
+        yield "默认回答", None
+        yield "", {"tokens_in": 8, "tokens_out": 4}
+
+
+async def test_widget_card_flow(sqlite_env, monkeypatch):
+    """工具返回 nexus_card → widget_card 事件 + Message.cards 持久化 + 历史接口透出。"""
+    from app.core.security import generate_api_key
+    from app.models.platform import ApiKey
+
+    llm = CardToolLLM()
+    from app.services.chat import orchestrator
+    monkeypatch.setattr(orchestrator, "get_llm_client", lambda *_: llm)
+    monkeypatch.setattr(
+        "app.services.chat.orchestrator.execute_tool",
+        lambda t, a, ctx=None: '{"nexus_card": {"card_type": "stats", "title": "订单", '
+        '"items": [{"label": "总数", "value": 42}]}, "raw": "完整业务数据"}',
+    )
+
+    app_id, conv_id, token = await _mk_env()
+    async with session_scope() as session:
+        session.add(Tool(
+            app_id=app_id, name="order_stats", description="订单统计", type="http_api",
+            config={"method": "GET", "url": "http://internal/stats"},
+        ))
+        await session.commit()
+
+    events = []
+    async with session_scope() as session:
+        app_row = await session.get(App, app_id)
+        async for ev in orchestrator.run_chat(session, app_row, conv_id, "订单怎么样", []):
+            events.append(ev)
+
+    card_events = [e for e in events if e["type"] == "widget_card"]
+    assert card_events and card_events[0]["card"]["card_type"] == "stats"
+
+    async with session_scope() as session:
+        msgs = list((await session.execute(
+            select(Message).where(
+                Message.conversation_id == conv_id, Message.role == "assistant"
+            )
+        )).scalars().all())
+        assert msgs[0].cards and msgs[0].cards[0]["items"][0]["value"] == 42
+
+    # 历史接口透出 cards（JWT 控制台端点，MessageOut 含 cards）
+    from app.main import app as fastapi_app
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://t") as client:
+        r = await client.get(
+            f"/api/v1/conversations/{conv_id}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        m = [x for x in r.json() if x["role"] == "assistant"][0]
+        assert m["cards"] and m["cards"][0]["card_type"] == "stats"

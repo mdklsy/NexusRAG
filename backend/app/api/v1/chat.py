@@ -270,6 +270,7 @@ async def widget_messages(
                 "role": m.role,
                 "content": m.content,
                 "citations": m.citations or [],
+                "cards": m.cards or [],
                 "created_at": m.created_at,
             }
             for m in rows

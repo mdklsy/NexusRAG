@@ -207,6 +207,20 @@
       ".hist-loading{text-align:center;font-size:12px;color:#999;padding:6px 0}" +
       ".hist-divider{text-align:center;font-size:11px;color:#aaa;margin:10px 0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
       ".hist-end{text-align:center;font-size:11px;color:#bbb;padding:4px 0 8px}" +
+      // 生成式 UI 卡片
+      ".nx-card{margin-top:8px;background:#f8f9fb;border:1px solid #eceef2;border-radius:8px;padding:8px 10px}" +
+      ".nx-card-title{font-size:12px;font-weight:600;color:#333;margin-bottom:6px}" +
+      ".nx-stats{display:flex;flex-wrap:wrap;gap:6px}" +
+      ".nx-stat{flex:1 1 30%;background:#fff;border-radius:6px;padding:6px 8px;min-width:80px}" +
+      ".nx-stat-v{font-size:16px;font-weight:700;color:" + theme + "}" +
+      ".nx-stat-l{font-size:11px;color:#888;margin-top:2px}" +
+      ".nx-table{width:100%;border-collapse:collapse;font-size:12px;background:#fff}" +
+      ".nx-table th{background:#f0f2f5;color:#555;text-align:left;padding:4px 8px;font-weight:600}" +
+      ".nx-table td{border-top:1px solid #f0f2f5;padding:4px 8px;color:#333}" +
+      ".nx-list{margin:0;padding-left:18px;font-size:12.5px;color:#333}" +
+      ".nx-list li{margin:2px 0}" +
+      ".nx-actions{display:flex;flex-wrap:wrap;gap:6px}" +
+      ".nx-btn{display:inline-block;background:" + theme + ";color:#fff;border-radius:6px;padding:6px 12px;font-size:12.5px;text-decoration:none}" +
       "@media (max-width:480px){.panel{right:8px;left:8px;width:auto;bottom:84px}}"
     );
   }
@@ -390,6 +404,57 @@
     bubbleEl.appendChild(c);
   }
 
+  // ---------- 生成式 UI 卡片（工具响应 nexus_card） ----------
+  // 卡型白名单：stats/table/list/actions；按钮只渲染为链接（target=_blank），
+  // 全部走 el() + textContent，不注入 HTML，防 XSS。
+  function renderCard(bubbleEl, card) {
+    var box = el("div", "nx-card");
+    if (card.title) box.appendChild(el("div", "nx-card-title", String(card.title).slice(0, 60)));
+    var i;
+    if (card.card_type === "stats") {
+      var grid = el("div", "nx-stats");
+      (card.items || []).slice(0, 8).forEach(function (it) {
+        var cell = el("div", "nx-stat");
+        cell.appendChild(el("div", "nx-stat-v", String(it.value != null ? it.value : "—").slice(0, 20)));
+        cell.appendChild(el("div", "nx-stat-l", String(it.label || "").slice(0, 20)));
+        grid.appendChild(cell);
+      });
+      box.appendChild(grid);
+    } else if (card.card_type === "table") {
+      var tbl = el("table", "nx-table");
+      var head = el("tr");
+      (card.headers || []).slice(0, 6).forEach(function (h) {
+        head.appendChild(el("th", null, String(h).slice(0, 30)));
+      });
+      tbl.appendChild(head);
+      (card.rows || []).slice(0, 10).forEach(function (row) {
+        var tr = el("tr");
+        (row || []).slice(0, 6).forEach(function (cell) {
+          tr.appendChild(el("td", null, String(cell == null ? "" : cell).slice(0, 60)));
+        });
+        tbl.appendChild(tr);
+      });
+      box.appendChild(tbl);
+    } else if (card.card_type === "list") {
+      var ul = el("ul", "nx-list");
+      (card.items || []).slice(0, 10).forEach(function (it) {
+        ul.appendChild(el("li", null, String(it).slice(0, 80)));
+      });
+      box.appendChild(ul);
+    } else if (card.card_type === "actions") {
+      var bar = el("div", "nx-actions");
+      (card.buttons || []).slice(0, 5).forEach(function (btn) {
+        var a = el("a", "nx-btn", String(btn.label || "查看").slice(0, 24));
+        a.href = String(btn.url || "#");
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        bar.appendChild(a);
+      });
+      box.appendChild(bar);
+    }
+    bubbleEl.appendChild(box);
+  }
+
   // ---------- 下拉懒加载历史 ----------
   // 打开面板续接最近会话（最新一页）；滚到顶部按页拉更早的记录，
   // 当前会话翻完自动接更早的会话（分隔条标注），全部翻完显示到底提示。
@@ -409,7 +474,7 @@
     });
   }
 
-  // 历史消息渲染（与流式回复同一套样式）：user 纯文本，assistant 走 Markdown + 引用
+  // 历史消息渲染（与流式回复同一套样式）：user 纯文本，assistant 走 Markdown + 卡片 + 引用
   function buildMsg(m) {
     if (m.role === "user") return el("div", "msg m-u", m.content);
     if (m.role !== "assistant") return null;
@@ -417,6 +482,9 @@
     var txt = el("span", "txt");
     txt.innerHTML = renderMarkdown(m.content);
     b.appendChild(txt);
+    if (m.cards && m.cards.length) {
+      for (var ci = 0; ci < m.cards.length; ci++) renderCard(b, m.cards[ci]);
+    }
     if (m.citations && m.citations.length) renderCites(b, m.citations);
     return b;
   }
@@ -557,12 +625,15 @@
     var typing = showTyping();
     var bubbleEl = null;
     var citations = null;
+    var cards = [];
 
     postChat(
       text,
       function (ev) {
         if (ev.type === "conversation") {
           state.conversationId = ev.conversation_id;
+        } else if (ev.type === "widget_card") {
+          cards.push(ev.card);
         } else if (ev.type === "delta") {
           // 过程类事件（plan/agent_start/agent_done/tool_call/tool_result）按产品决定
           // 永不展示——规划与工具调用细节由最终回答的文字交代
@@ -585,6 +656,9 @@
         if (!bubbleEl) {
           bubbleEl = appendBot("（无回复）");
         }
+        cards.forEach(function (card) {
+          renderCard(bubbleEl, card);
+        });
         if (citations && citations.length) {
           var c = el("div", "cites", "来源：");
           var seenCite = {};

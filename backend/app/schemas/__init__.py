@@ -356,6 +356,8 @@ class MessageOut(ORMModel):
     latency_ms: int
     created_at: datetime
     review_status: str = "published"
+    cards: list | None = None  # 生成式 UI 卡片（工具 nexus_card）
+
 
 
 # ---------- Dashboard ----------

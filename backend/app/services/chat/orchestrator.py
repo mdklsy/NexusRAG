@@ -30,6 +30,26 @@ from app.services.tools import (
 )
 
 TOOL_MAX_ROUNDS = 2
+
+# 生成式 UI 卡片（形态：工具响应 JSON 顶层 nexus_card）——白名单卡型 + 4KB 上限
+CARD_TYPES = {"stats", "table", "list", "actions"}
+
+
+def _extract_card(result_text: str) -> dict | None:
+    """工具响应为纯 JSON 且顶层含 nexus_card 时取出卡片；不合规一律忽略。"""
+    text = (result_text or "").strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    card = data.get("nexus_card")
+    if not isinstance(card, dict) or card.get("card_type") not in CARD_TYPES:
+        return None
+    if len(json.dumps(card, ensure_ascii=False)) > 4096:
+        return None
+    return card
 TOOL_ROUNDS_LIMIT = (1, 6)
 
 # ---------- Prompt（规则层放 system；参考资料/问题等输入放 user，见 §消息分层最佳实践） ----------
@@ -282,6 +302,11 @@ async def _run_with_tools(
                 result, ok = f"工具执行失败: {e}", False
             except Exception as e:  # noqa: BLE001
                 result, ok = f"工具执行异常: {type(e).__name__}: {e}", False
+            # 生成式 UI：业务工具返回 nexus_card 结构时给挂件发卡片事件（LLM 收到的文本不变）
+            if ok:
+                card = _extract_card(result)
+                if card:
+                    yield {"type": "widget_card", "card": card}
             yield {
                 "type": "tool_result",
                 "name": tc["name"],
@@ -355,6 +380,7 @@ async def run_chat(
 
     answer_parts: list[str] = []
     usage: dict = {}
+    cards: list[dict] = []  # 本轮工具产生的 UI 卡片（随消息持久化，挂件渲染）
     tools = await get_app_tools(session, app.id)
     tool_ctx = {"end_user": end_user or {}, "metadata": metadata or {}}
 
@@ -384,6 +410,10 @@ async def run_chat(
                     yield {"type": "delta", "content": event["content"]}
             elif event["type"] == "usage":
                 usage = event
+            elif event["type"] == "widget_card":
+                cards.append(event["card"])
+                if not review_mode:
+                    yield event
             elif review_mode and event["type"] in ("tool_call", "tool_result"):
                 continue  # 审核模式下过程事件同样不下发（反正回答都要憋着）
             else:
@@ -399,6 +429,10 @@ async def run_chat(
                     yield {"type": "delta", "content": event["content"]}
             elif event["type"] == "usage":
                 usage = event  # 事件本身即 {type, tokens_in, tokens_out}
+            elif event["type"] == "widget_card":
+                cards.append(event["card"])
+                if not review_mode:
+                    yield event
             else:
                 yield event
     else:
@@ -432,6 +466,7 @@ async def run_chat(
         role="assistant",
         content=answer,
         citations=citations,
+        cards=cards or None,  # 生成式 UI 卡片随消息持久化（历史可复现）
         hit=hit if intent == "qa" else None,  # 知识缺口信号源：仅知识问答记录检索命中
         tokens_in=usage.get("tokens_in", 0),
         tokens_out=usage.get("tokens_out", 0),
