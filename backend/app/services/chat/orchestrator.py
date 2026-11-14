@@ -424,6 +424,7 @@ async def run_chat(
         role="assistant",
         content=answer,
         citations=citations,
+        hit=hit if intent == "qa" else None,  # 知识缺口信号源：仅知识问答记录检索命中
         tokens_in=usage.get("tokens_in", 0),
         tokens_out=usage.get("tokens_out", 0),
         latency_ms=latency_ms,

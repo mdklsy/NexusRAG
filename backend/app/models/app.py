@@ -130,6 +130,10 @@ class Message(TimestampMixin, Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     # 人工审核状态：published=已发布（默认）| pending=待审核（挂件不可见）| rejected=被驳回（挂件不可见）
     review_status: Mapped[str] = mapped_column(String(20), default="published", server_default="published", index=True)
+    # 检索是否命中（仅 assistant 消息，intent=qa 时记录）：知识缺口发现的信号源
+    hit: Mapped[bool | None] = mapped_column(Boolean)
+    # 生成式 UI 卡片（工具响应携带 nexus_card 时收集），挂件渲染成结构化组件
+    cards: Mapped[list | None] = mapped_column(JSONType, nullable=True)
 
 
 class PendingAction(TimestampMixin, Base):
@@ -174,6 +178,46 @@ class UsageEvent(Base):
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     hit: Mapped[bool | None] = mapped_column(Boolean)  # 检索是否命中（chat 也记录）
+    cached: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # 语义缓存命中
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
+
+
+class ReviewDecision(Base):
+    """回答审核决策审计：飞轮数据源（改写对挖掘、驳回转评测、质量统计）。"""
+
+    __tablename__ = "review_decisions"
+    __table_args__ = (Index("ix_review_decisions_app_time", "app_id", "decided_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    app_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("apps.id", ondelete="CASCADE"))
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL")
+    )
+    action: Mapped[str] = mapped_column(String(10))  # approve | replace | reject
+    editor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    content_before: Mapped[str | None] = mapped_column(Text)  # replace 前的原始回答
+    content_after: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class KnowledgeGap(TimestampMixin, Base):
+    """知识缺口：无答案问题经 LLM 聚类出的主题，提示知识库缺什么。"""
+
+    __tablename__ = "knowledge_gaps"
+    __table_args__ = (Index("ix_knowledge_gaps_app_status", "app_id", "status"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    app_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("apps.id", ondelete="CASCADE"))
+    theme: Mapped[str] = mapped_column(String(200))
+    representative_questions: Mapped[list] = mapped_column(JSONType, default=list)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open | drafted | resolved
+    draft_answer: Mapped[str | None] = mapped_column(Text)

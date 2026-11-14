@@ -65,6 +65,7 @@ class EvalRun(TimestampMixin, Base):
     done: Mapped[int] = mapped_column(Integer, default=0)
     avg_faithfulness: Mapped[float | None] = mapped_column(Float)
     avg_relevance: Mapped[float | None] = mapped_column(Float)
+    avg_context_sufficiency: Mapped[float | None] = mapped_column(Float)  # 资料充分度（自诊断用）
     hit_rate: Mapped[float | None] = mapped_column(Float)
     error: Mapped[str | None] = mapped_column(Text)
 
@@ -87,6 +88,9 @@ class EvalResult(Base):
     retrieved_doc_names: Mapped[list] = mapped_column(JSONType, default=list)
     faithfulness: Mapped[float | None] = mapped_column(Float)
     relevance: Mapped[float | None] = mapped_column(Float)
+    context_sufficiency: Mapped[float | None] = mapped_column(Float)  # 资料是否足以回答
+    retrieved_chunks: Mapped[list | None] = mapped_column(JSONType, nullable=True)  # [{chunk_id,document_name,heading,score}]
+    diagnosis: Mapped[dict | None] = mapped_column(JSONType, nullable=True)  # {cause,detail,suggestion}
     hit: Mapped[bool | None] = mapped_column(Boolean)
     elapsed_ms: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)

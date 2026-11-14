@@ -8,6 +8,7 @@ import KBDetail from "./pages/KBDetail";
 import Playground from "./pages/Playground";
 import Evals from "./pages/Evals";
 import HumanLoop from "./pages/HumanLoop";
+import Insights from "./pages/Insights";
 import Users from "./pages/Users";
 import Settings from "./pages/Settings";
 
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="playground" element={<Playground />} />
         <Route path="evals" element={<Evals />} />
         <Route path="hitl" element={<HumanLoop />} />
+        <Route path="insights" element={<Insights />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="users" element={<Users />} />
         <Route path="settings" element={<Settings />} />

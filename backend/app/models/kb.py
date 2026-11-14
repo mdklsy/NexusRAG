@@ -63,6 +63,8 @@ class Document(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
     meta: Mapped[dict] = mapped_column(JSONType, default=dict)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 文档级访问控制：None/{"mode":"public"}=所有人可见；{"mode":"restricted","end_users":["id1"]}=仅白名单终端用户
+    acl: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
 
 class Chunk(TimestampMixin, Base):

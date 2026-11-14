@@ -4,6 +4,7 @@ import {
   DatabaseOutlined,
   ExperimentOutlined,
   LogoutOutlined,
+  BulbOutlined,
   DashboardOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
@@ -34,6 +35,7 @@ export default function Layout() {
     { key: "/kbs", icon: <DatabaseOutlined />, label: "知识库" },
     { key: "/playground", icon: <ExperimentOutlined />, label: "调试" },
     { key: "/evals", icon: <ExperimentOutlined />, label: "评测" },
+    { key: "/insights", icon: <BulbOutlined />, label: "洞察" },
     {
       key: "/hitl",
       icon: <SafetyCertificateOutlined />,

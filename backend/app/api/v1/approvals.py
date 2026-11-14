@@ -135,7 +135,9 @@ async def decide_review(
     if msg.review_status != "pending":
         raise HTTPException(409, f"该回答已处理（{msg.review_status}）")
     try:
-        msg = await approvals.decide_review(session, msg, body.action, body.content)
+        msg = await approvals.decide_review(
+            session, msg, body.action, body.content, app_id=app.id, editor_id=user.id
+        )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"review_status": msg.review_status}

@@ -211,18 +211,43 @@ async def count_pending(session: AsyncSession) -> dict:
     return {"approvals": approvals, "reviews": reviews}
 
 
-async def decide_review(session: AsyncSession, msg: Message, action: str, content: str | None):
-    """答案审核决策：approve=放行原文；replace=改写后放行；reject=驳回（永不可见）。"""
+async def decide_review(
+    session: AsyncSession,
+    msg: Message,
+    action: str,
+    content: str | None,
+    *,
+    app_id=None,
+    editor_id=None,
+):
+    """答案审核决策：approve=放行原文；replace=改写后放行；reject=驳回（永不可见）。
+
+    同时落 ReviewDecision 审计行（改写前的原文必须留存——它是规则挖掘的原料）。
+    """
+    from app.models.app import ReviewDecision
+
     if action == "approve":
         msg.review_status = "published"
     elif action == "replace":
         if not (content or "").strip():
             raise ValueError("改写内容不能为空")
-        msg.content = content
         msg.review_status = "published"
     elif action == "reject":
         msg.review_status = "rejected"
     else:
         raise ValueError("action 仅支持 approve | replace | reject")
+    content_before = msg.content if action in ("replace", "reject") else None
+    if action == "replace":
+        msg.content = content
+    session.add(
+        ReviewDecision(
+            app_id=app_id,
+            message_id=msg.id,
+            action=action,
+            editor_id=editor_id,
+            content_before=content_before,
+            content_after=content if action == "replace" else None,
+        )
+    )
     await session.commit()
     return msg
