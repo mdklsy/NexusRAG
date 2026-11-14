@@ -298,6 +298,25 @@ async def get_widget_secret(
 # ---------- API Keys ----------
 
 
+@router.get("/{app_id}/widget-secret")
+async def get_widget_secret(
+    app_id: uuid.UUID,
+    _: User = Depends(require_role("editor")),
+    session: AsyncSession = Depends(get_session),
+):
+    """页面后端签名用密钥（HMAC 终端用户票据 / 属性声明签名）。
+
+    该密钥只能由服务端持有——绝不进浏览器前端。常规详情接口已摘除本值。
+    """
+    app = await session.get(App, app_id)
+    if app is None:
+        raise HTTPException(404, "应用不存在")
+    secret = (app.widget_config or {}).get("widget_secret")
+    if not secret:
+        raise HTTPException(404, "应用未配置 widget_secret")
+    return {"widget_secret": secret}
+
+
 @router.post("/{app_id}/api-keys", response_model=ApiKeyCreated, status_code=201)
 async def create_api_key(
     app_id: uuid.UUID,
