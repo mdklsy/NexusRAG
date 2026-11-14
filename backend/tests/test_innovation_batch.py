@@ -215,7 +215,8 @@ async def test_document_acl_retrieval(sqlite_env):
 
     from app.db.session import session_scope
     from app.models.kb import Document
-    from app.services.retrieval import allowed_document_ids, retrieve
+    from app.services.retrieval import retrieve
+    from app.services.retrieval.acl import resolve_acl
 
     kb_id, id1, id2 = await _mk_acl_kb()
     async with session_scope() as session:
@@ -225,23 +226,22 @@ async def test_document_acl_retrieval(sqlite_env):
         )
         await session.commit()
 
-    # allowlist 计算
+    # 过滤集计算（ID 白名单兼容路径）
     async with session_scope() as session:
-        assert await allowed_document_ids(session, [kb_id], None) is None
-        allowed_u1 = await allowed_document_ids(session, [kb_id], "op1")
-        allowed_u2 = await allowed_document_ids(session, [kb_id], "op2")
-        assert allowed_u1 is not None and id2 in allowed_u1
-        assert allowed_u2 is not None and id2 not in allowed_u2 and id1 in allowed_u2
+        assert await resolve_acl(session, [kb_id], None) is None
+        f_u1 = await resolve_acl(session, [kb_id], {"id": "op1"})
+        f_u2 = await resolve_acl(session, [kb_id], {"id": "op2"})
+        assert f_u1 is None or id2 not in f_u1.deny_doc_ids  # op1 被授权，无过滤或不含 doc2
+        assert f_u2 is not None and id2 in f_u2.deny_doc_ids
 
-    # 检索过滤：u2 拿不到受限文档内容；无过滤则两文档都可能命中
+    # 检索过滤：op2 拿不到受限文档内容
     from app.models.kb import KnowledgeBase
 
     async with session_scope() as session:
         kb = await session.get(KnowledgeBase, kb_id)
         cfg = {"top_k": 5, "score_threshold": 0, "use_kg": False, "use_bm25": True}
         r_all = await retrieve(session, [kb], "薪资范围", cfg)
-        r_acl = await retrieve(session, [kb], "薪资范围", cfg,
-                               allowed_document_ids=allowed_u2)
+        r_acl = await retrieve(session, [kb], "薪资范围", cfg, acl=f_u2)
         assert any("八千" in c.content for c in r_all.chunks)
         assert all("八千" not in c.content for c in r_acl.chunks)
 
@@ -537,3 +537,124 @@ async def test_budget_exceeded_blocks_chat(sqlite_env, monkeypatch):
             events.append(ev)
     assert any(e["type"] == "error" and "预算" in e.get("message", "") for e in events)
     assert llm.stream_calls == 0
+
+
+async def test_acl_v2_rules(sqlite_env):
+    """eval_rules 单元：claims 命中/缺失属性/多条件 AND/数组属性/end_users 兼容。"""
+    from app.services.retrieval.acl import eval_rules
+
+    restricted = {"mode": "restricted", "claims": [{"key": "dept", "values": ["销售部"]}]}
+    assert eval_rules(restricted, "u1", {"dept": "销售部"})
+    assert eval_rules(restricted, "u1", {"dept": ["售后部", "销售部"]})  # 数组属性任一命中
+    assert not eval_rules(restricted, "u1", {"dept": "售后部"})
+    assert not eval_rules(restricted, "u1", {})  # 缺失声明不满足
+    # 多条件 AND
+    multi = {"mode": "restricted", "claims": [
+        {"key": "dept", "values": ["销售部"]}, {"key": "tier", "values": ["vip"]}]}
+    assert eval_rules(multi, "u1", {"dept": "销售部", "tier": "vip"})
+    assert not eval_rules(multi, "u1", {"dept": "销售部"})
+    # ID 白名单兼容
+    ids = {"mode": "restricted", "end_users": ["op1"]}
+    assert eval_rules(ids, "op1", None)
+    assert not eval_rules(ids, "op2", {"dept": "销售部"})
+    # restricted 无任何规则 → 无人可见
+    assert not eval_rules({"mode": "restricted"}, "u1", {"dept": "销售部"})
+    # public / None
+    assert eval_rules({"mode": "public"}, None, None)
+    assert eval_rules(None, None, None)
+
+
+async def test_acl_v2_chunk_override(sqlite_env):
+    """覆盖模式：公开文档里封锁单块；受限文档里公开单块。"""
+    from sqlalchemy import select as sa_select, update as sa_update
+
+    from app.db.session import session_scope
+    from app.models.kb import Chunk, Document, KnowledgeBase
+    from app.services.retrieval import retrieve
+    from app.services.retrieval.acl import resolve_acl
+
+    kb_id, id1, id2 = await _mk_acl_kb()
+    async with session_scope() as session:
+        doc2_chunks = (await session.execute(
+            sa_select(Chunk).where(Chunk.document_id == id2).order_by(Chunk.seq)
+        )).scalars().all()
+        doc1_chunks = (await session.execute(
+            sa_select(Chunk).where(Chunk.document_id == id1).order_by(Chunk.seq)
+        )).scalars().all()
+        assert doc2_chunks and doc1_chunks
+        # 受限文档(doc2)里把第一块显式公开（块级例外）
+        await session.execute(sa_update(Chunk).where(Chunk.id == doc2_chunks[0].id)
+                              .values(acl={"mode": "public"}))
+        # 公开文档(doc1)里把第一块封锁（claims 不满足则不可见）
+        await session.execute(sa_update(Chunk).where(Chunk.id == doc1_chunks[0].id)
+                              .values(acl={"mode": "restricted",
+                                           "claims": [{"key": "tier", "values": ["vip"]}]}))
+        # 文档 doc2 受限：仅 dept=销售部 可见
+        await session.execute(sa_update(Document).where(Document.id == id2)
+                              .values(acl={"mode": "restricted",
+                                           "claims": [{"key": "dept", "values": ["销售部"]}]}))
+        await session.commit()
+        ids = {"doc2_c0": doc2_chunks[0].id, "doc1_c0": doc1_chunks[0].id}
+
+    # 场景 A：dept=销售部（doc2 授权）但非 vip（doc1 第一块封锁）
+    async with session_scope() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        flt = await resolve_acl(session, [kb_id], {"id": "u9", "attributes": {"dept": "销售部"}})
+        assert flt is not None and ids["doc1_c0"] in flt.deny_chunk_ids
+        assert ids["doc2_c0"] not in flt.deny_chunk_ids  # 块级例外放行
+        cfg = {"top_k": 10, "score_threshold": 0, "use_kg": False, "use_bm25": False}
+        r = await retrieve(session, [kb], "薪资 范围 包邮", cfg, acl=flt)
+        got = {c.chunk_id for c in r.chunks}
+        assert ids["doc1_c0"] not in got
+
+    # 场景 B：无声明用户 → doc2 全禁，doc2 第一块例外可见
+    async with session_scope() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        flt = await resolve_acl(session, [kb_id], {"id": "u9"})
+        assert flt is not None and id2 in flt.deny_doc_ids
+        assert ids["doc2_c0"] not in flt.deny_chunk_ids  # 块级 public 例外
+
+
+async def test_chunk_acl_endpoint(sqlite_env):
+    """PUT /chunks/{id}/acl：设置/继承闭环。"""
+    from app.core.security import generate_api_key  # noqa: F401
+
+    from sqlalchemy import select as sa_select
+
+    from app.db.session import session_scope
+    from app.models.kb import Chunk
+
+    kb_id, id1, _id2 = await _mk_acl_kb()
+    async with session_scope() as session:
+        chunk = (await session.execute(
+            sa_select(Chunk).where(Chunk.document_id == id1).order_by(Chunk.seq)
+        )).scalars().first()
+        chunk_id = chunk.id
+
+    from app.main import app as fastapi_app
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://t") as client:
+        r = await client.get("/api/v1/auth/login")  # 占位：拿 token
+        token = await _login_token(client)
+        H = {"Authorization": f"Bearer {token}"}
+        # 设置受限
+        r = await client.put(f"/api/v1/chunks/{chunk_id}/acl", headers=H, json={
+            "mode": "restricted", "end_users": [], "claims": [{"key": "tier", "values": ["vip"]}]})
+        assert r.status_code == 200 and r.json()["acl"]["mode"] == "restricted"
+        # 恢复继承
+        r = await client.put(f"/api/v1/chunks/{chunk_id}/acl", headers=H,
+                             json={"mode": "inherit"})
+        assert r.status_code == 200 and r.json()["acl"] is None
+
+
+async def _login_token(client) -> str:
+    from app.core.security import hash_password, create_access_token
+    from app.db.session import session_scope
+    from app.models.platform import User
+
+    async with session_scope() as session:
+        admin = User(email="acl2-admin@test.local", name="a",
+                     hashed_password=hash_password("x"), role="admin")
+        session.add(admin)
+        await session.commit()
+        return create_access_token(str(admin.id))

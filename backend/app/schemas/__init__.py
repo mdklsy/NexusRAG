@@ -89,9 +89,36 @@ class DocumentOut(ORMModel):
     acl: dict | None = None  # None/{"mode":"public"}=公开；{"mode":"restricted","end_users":[...]}=白名单
 
 
+class ClaimIn(BaseModel):
+    key: str = Field(min_length=1, max_length=100)
+    values: list[str] = Field(min_length=1, max_length=100)
+
+
 class DocumentAclIn(BaseModel):
     mode: str = Field(pattern="^(public|restricted)$")
     end_users: list[str] = Field(default_factory=list, max_length=500)
+    claims: list[ClaimIn] = Field(default_factory=list, max_length=20)
+
+    def to_acl(self) -> dict:
+        if self.mode == "public":
+            return {"mode": "public"}
+        if not self.end_users and not self.claims:
+            raise ValueError("受限模式至少需要一条授权规则（ID 白名单或属性声明）")
+        return {"mode": "restricted", "end_users": self.end_users, "claims": [c.model_dump() for c in self.claims]}
+
+
+class ChunkAclIn(BaseModel):
+    mode: str = Field(pattern="^(inherit|public|restricted)$")
+    end_users: list[str] = Field(default_factory=list, max_length=500)
+    claims: list[ClaimIn] = Field(default_factory=list, max_length=20)
+
+    def to_acl(self) -> dict | None:
+        if self.mode == "inherit":
+            return None
+        doc_in = DocumentAclIn(
+            mode=self.mode, end_users=self.end_users, claims=self.claims
+        )
+        return doc_in.to_acl()
 
 
 class ChunkOut(ORMModel):
@@ -100,6 +127,7 @@ class ChunkOut(ORMModel):
     content: str
     token_count: int
     meta: dict
+    acl: dict | None = None  # None=继承文档规则
 
 
 # ---------- App ----------
@@ -313,6 +341,11 @@ class EndUserIn(BaseModel):
 
     id: str = Field(min_length=1, max_length=128)
     name: str = Field(default="", max_length=200)
+    # 属性声明（ACL v2）：对接方系统作为身份事实源传入（dept/tier 等）；
+    # 挂件浏览器场景不可信，应用配置了 widget_secret 时必须随 sig/ts 验签
+    attributes: dict | None = None
+    sig: str = Field(default="", max_length=200)
+    ts: int = Field(default=0)
 
 
 class ChatIn(BaseModel):

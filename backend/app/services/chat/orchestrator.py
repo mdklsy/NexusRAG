@@ -417,15 +417,11 @@ async def run_chat(
         search_query = await _rewrite_query(llm, question, history_eff)
         kbs = await get_app_knowledge_bases(session, app.id)
         if kbs:
-            # 文档级 ACL：挂件等带终端用户身份的调用按文档可见范围过滤检索
-            from app.services.retrieval import allowed_document_ids
+            # ACL v2：按终端用户（ID 白名单 + 属性声明）计算文档级/块级过滤
+            from app.services.retrieval.acl import resolve_acl
 
-            acl_ids = await allowed_document_ids(
-                session, [kb.id for kb in kbs], (end_user or {}).get("id")
-            )
-            result = await retrieve(
-                session, kbs, search_query, config, allowed_document_ids=acl_ids
-            )
+            acl = await resolve_acl(session, [kb.id for kb in kbs], end_user)
+            result = await retrieve(session, kbs, search_query, config, acl=acl)
             context, citations = result.build_context()
             hit = result.hit
             graph_fact_count = len(result.graph_facts)

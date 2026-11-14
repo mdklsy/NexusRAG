@@ -14,7 +14,7 @@ from app.core.tasks import dispatch_ingest
 from app.db.session import get_session
 from app.models.kb import Chunk, Document, KnowledgeBase
 from app.models.platform import User
-from app.schemas import ChunkOut, DocumentOut, DocumentUrlIn, DocumentAclIn
+from app.schemas import ChunkAclIn, ChunkOut, DocumentAclIn, DocumentOut, DocumentUrlIn
 from app.services.ingestion.pipeline import purge_document, reset_document
 
 router = APIRouter(tags=["documents"])
@@ -118,13 +118,10 @@ async def set_document_acl(
     doc = await session.get(Document, document_id)
     if doc is None:
         raise HTTPException(404, "文档不存在")
-    if body.mode == "restricted" and not body.end_users:
-        raise HTTPException(400, "受限模式至少需要一名终端用户（否则请用公开模式）")
-    doc.acl = (
-        {"mode": "public"}
-        if body.mode == "public"
-        else {"mode": "restricted", "end_users": body.end_users}
-    )
+    try:
+        doc.acl = body.to_acl()
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     await session.commit()
     await session.refresh(doc)
     return doc
@@ -192,3 +189,23 @@ async def list_chunks(
         .scalars()
         .all()
     )
+
+
+@router.put("/chunks/{chunk_id}/acl", response_model=ChunkOut)
+async def set_chunk_acl(
+    chunk_id: uuid.UUID,
+    body: ChunkAclIn,
+    _: User = Depends(require_role("editor")),
+    session: AsyncSession = Depends(get_session),
+):
+    """块级 ACL（覆盖模式）：inherit=清空块规则继承文档；public/restricted=块规则覆盖文档规则。"""
+    chunk = await session.get(Chunk, chunk_id)
+    if chunk is None:
+        raise HTTPException(404, "分块不存在")
+    chunk.acl = body.to_acl()
+    await session.commit()
+    await session.refresh(chunk)
+    return chunk
+
+
+

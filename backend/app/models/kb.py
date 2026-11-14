@@ -80,6 +80,8 @@ class Chunk(TimestampMixin, Base):
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
     )
     seq: Mapped[int] = mapped_column(Integer)
+    # 块级 ACL（覆盖模式）：None=继承文档规则；有值则该块可见性完全由块规则决定
+    acl: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     meta: Mapped[dict] = mapped_column(JSONType, default=dict)

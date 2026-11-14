@@ -42,40 +42,9 @@ async def get_app_knowledge_bases(session: AsyncSession, app_id: uuid.UUID) -> l
     return list(rows)
 
 
-async def allowed_document_ids(
-    session: AsyncSession, kb_ids: list[uuid.UUID], end_user_id: str | None
-) -> set[uuid.UUID] | None:
-    """按文档 ACL 计算 end_user 可见的文档集合。
+from app.services.retrieval.acl import AclFilter, eval_rules, resolve_acl  # noqa: E402
 
-    返回 None = 不需要过滤（kb 内没有受限文档，或调用方无终端用户身份——
-    控制台/评测/开放 API 直连视为运营侧全量可见）。
-    """
-    if not kb_ids or not end_user_id:
-        return None
-    docs = (
-        (
-            await session.execute(
-                select(Document).where(
-                    Document.kb_id.in_(kb_ids),
-                    Document.status == "completed",
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    restricted = [d for d in docs if (d.acl or {}).get("mode") == "restricted"]
-    if not restricted:
-        return None  # 全部公开，无需过滤
-    allowed: set[uuid.UUID] = set()
-    for d in docs:
-        acl = d.acl or {}
-        if acl.get("mode") == "restricted":
-            if end_user_id in (acl.get("end_users") or []):
-                allowed.add(d.id)
-        else:
-            allowed.add(d.id)  # 公开（含未配置 acl 的旧文档）
-    return allowed
+__all__.append("resolve_acl")
 
 
 async def retrieve(
@@ -84,7 +53,7 @@ async def retrieve(
     query: str,
     config: dict | None = None,
     *,
-    allowed_document_ids: set[uuid.UUID] | None = None,
+    acl: "AclFilter | None" = None,
 ) -> RetrievalResult:
     from app.core import runtime_settings
 
@@ -160,9 +129,11 @@ async def retrieve(
                 )
             )
 
-        # 文档级 ACL：hydrate 后按可见文档过滤（chunk→document 归属在此才可知）
-        if allowed_document_ids is not None:
-            result.chunks = [c for c in result.chunks if c.document_id in allowed_document_ids]
+        # ACL v2（文档级+块级）：hydrate 后按 deny 集过滤（chunk→document 归属在此才可知）
+        if acl is not None:
+            result.chunks = [
+                c for c in result.chunks if acl.allows(c.chunk_id, c.document_id)
+            ]
 
         # ---------- 重排 ----------
         if rerank_mode != "none" and len(result.chunks) > 1:
@@ -174,7 +145,7 @@ async def retrieve(
         result.chunks = result.chunks[:top_k]
 
     # ---------- KG 增强（ACL 过滤激活时跳过：图谱事实无文档归属，避免绕过权限泄露） ----------
-    if use_kg and allowed_document_ids is None:
+    if use_kg and acl is None:
         graph = get_graph_store()
         for kb in kbs:
             names = await graph.list_entity_names(kb.id, limit=3000)
