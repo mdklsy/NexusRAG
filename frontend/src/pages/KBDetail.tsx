@@ -15,6 +15,7 @@ import {
   Tag,
   Typography,
   Upload,
+  Radio,
 } from "antd";
 import { LinkOutlined, UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -31,6 +32,7 @@ interface Doc {
   chunk_count: number;
   size_bytes: number;
   created_at: string;
+  acl?: { mode: string; end_users?: string[] } | null;
 }
 
 const STATUS_TAG: Record<string, [string, string]> = {
@@ -115,6 +117,21 @@ export default function KBDetail() {
     if (docs?.length) qc.invalidateQueries({ queryKey: ["kgStats", kbId] });
   }, [docs?.length]);
 
+  // 文档级 ACL：public=所有人可见；restricted=仅白名单终端用户（挂件按 end_user 过滤检索）
+  const [aclDoc, setAclDoc] = useState<Doc | null>(null);
+  const [aclMode, setAclMode] = useState<"public" | "restricted">("public");
+  const [aclUsers, setAclUsers] = useState("");
+  const aclSave = useMutation({
+    mutationFn: (v: { id: string; mode: string; users: string[] }) =>
+      api.put(`/api/v1/documents/${v.id}/acl`, { mode: v.mode, end_users: v.users }),
+    onSuccess: () => {
+      message.success("可见范围已更新");
+      setAclDoc(null);
+      qc.invalidateQueries({ queryKey: ["docs", kbId] });
+    },
+    onError: (e: any) => message.error(String(e?.message || e)),
+  });
+
   return (
     <Space direction="vertical" style={{ width: "100%" }} size={16}>
       <Card
@@ -182,6 +199,17 @@ export default function KBDetail() {
             },
             { title: "分块", dataIndex: "chunk_count", width: 80 },
             {
+              title: "可见范围",
+              dataIndex: "acl",
+              width: 100,
+              render: (v) =>
+                v?.mode === "restricted" ? (
+                  <Tag color="purple">指定{(v.end_users || []).length}人</Tag>
+                ) : (
+                  <Tag color="green">公开</Tag>
+                ),
+            },
+            {
               title: "错误",
               dataIndex: "error",
               ellipsis: true,
@@ -196,11 +224,21 @@ export default function KBDetail() {
             },
             {
               title: "操作",
-              width: 210,
+              width: 280,
               render: (_, r) => (
                 <Space size={4}>
                   <Button size="small" onClick={() => setChunkDoc(r)}>
                     预览
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      setAclDoc(r);
+                      setAclMode(r.acl?.mode === "restricted" ? "restricted" : "public");
+                      setAclUsers((r.acl?.end_users || []).join(", "));
+                    }}
+                  >
+                    可见范围
                   </Button>
                   <Popconfirm
                     title="重新分块该文档？"
@@ -222,6 +260,39 @@ export default function KBDetail() {
           ]}
         />
       </Card>
+
+      <Modal
+        title={`可见范围 - ${aclDoc?.name || ""}`}
+        open={!!aclDoc}
+        onCancel={() => setAclDoc(null)}
+        onOk={() =>
+          aclSave.mutate({
+            id: aclDoc!.id,
+            mode: aclMode,
+            users: aclUsers.split(/[,，\s]+/).filter(Boolean),
+          })
+        }
+        confirmLoading={aclSave.isPending}
+        okText="保存"
+      >
+        <Space direction="vertical" style={{ width: "100%" }} size={12}>
+          <Radio.Group value={aclMode} onChange={(e) => setAclMode(e.target.value)}>
+            <Radio value="public">公开：所有终端用户可见（默认）</Radio>
+            <Radio value="restricted">受限：仅指定终端用户可见</Radio>
+          </Radio.Group>
+          {aclMode === "restricted" && (
+            <Input.TextArea
+              rows={3}
+              value={aclUsers}
+              onChange={(e) => setAclUsers(e.target.value)}
+              placeholder="终端用户 ID，逗号分隔（即挂件接入时传入的 end_user.id）"
+            />
+          )}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            受限生效后：挂件检索会过滤该文档（含 BM25 与向量）；知识图谱事实不参与过滤，敏感文档所在库建议关闭 KG 增强
+          </Typography.Text>
+        </Space>
+      </Modal>
 
       <Modal
         title="导入网页"

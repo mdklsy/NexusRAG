@@ -86,6 +86,12 @@ class DocumentOut(ORMModel):
     error: str | None
     chunk_count: int
     created_at: datetime
+    acl: dict | None = None  # None/{"mode":"public"}=公开；{"mode":"restricted","end_users":[...]}=白名单
+
+
+class DocumentAclIn(BaseModel):
+    mode: str = Field(pattern="^(public|restricted)$")
+    end_users: list[str] = Field(default_factory=list, max_length=500)
 
 
 class ChunkOut(ORMModel):

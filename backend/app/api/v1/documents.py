@@ -14,7 +14,7 @@ from app.core.tasks import dispatch_ingest
 from app.db.session import get_session
 from app.models.kb import Chunk, Document, KnowledgeBase
 from app.models.platform import User
-from app.schemas import ChunkOut, DocumentOut, DocumentUrlIn
+from app.schemas import ChunkOut, DocumentOut, DocumentUrlIn, DocumentAclIn
 from app.services.ingestion.pipeline import purge_document, reset_document
 
 router = APIRouter(tags=["documents"])
@@ -105,6 +105,29 @@ async def list_documents(
         .scalars()
         .all()
     )
+
+
+@router.put("/documents/{document_id}/acl", response_model=DocumentOut)
+async def set_document_acl(
+    document_id: uuid.UUID,
+    body: DocumentAclIn,
+    _: User = Depends(require_role("editor")),
+    session: AsyncSession = Depends(get_session),
+):
+    """文档可见范围：public=所有人；restricted=仅 end_users 白名单内的终端用户。"""
+    doc = await session.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(404, "文档不存在")
+    if body.mode == "restricted" and not body.end_users:
+        raise HTTPException(400, "受限模式至少需要一名终端用户（否则请用公开模式）")
+    doc.acl = (
+        {"mode": "public"}
+        if body.mode == "public"
+        else {"mode": "restricted", "end_users": body.end_users}
+    )
+    await session.commit()
+    await session.refresh(doc)
+    return doc
 
 
 @router.get("/documents/{document_id}", response_model=DocumentOut)

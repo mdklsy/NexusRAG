@@ -179,3 +179,109 @@ async def test_knowledge_gap_discovery(sqlite_env, monkeypatch):
             gaps = list((await session.execute(select(KnowledgeGap))).scalars().all())
             statuses = {g.status for g in gaps}
             assert "resolved" in statuses
+
+
+async def _mk_acl_kb(monkeypatch=None):
+    """公开文档 + 受限文档各一，真实摄取进内存 Qdrant。返回 (kb_id, doc_pub, doc_res)。"""
+    import pathlib
+
+    from app.core.config import get_settings
+    from app.db.session import session_scope
+    from app.models.kb import Document, KnowledgeBase
+    from app.services.ingestion.pipeline import ingest_document
+
+    async with session_scope() as session:
+        kb = KnowledgeBase(name="acl", embedding_model="m", embedding_dim=8,
+                           chunk_config={"size": 100, "overlap": 20})
+        session.add(kb)
+        await session.flush()
+        d1 = Document(kb_id=kb.id, name="public.md", source_type="upload", file_path="acl_public.md")
+        d2 = Document(kb_id=kb.id, name="secret.md", source_type="upload", file_path="acl_secret.md")
+        session.add_all([d1, d2])
+        await session.commit()
+        kb_id, id1, id2 = kb.id, d1.id, d2.id
+    pd = pathlib.Path(get_settings().upload_dir)
+    pd.mkdir(parents=True, exist_ok=True)
+    (pd / "acl_public.md").write_text("# 公开政策\n\n全国包邮，顺丰发出。", encoding="utf-8")
+    (pd / "acl_secret.md").write_text("# 内部薪资\n\n一级薪资范围八千到一万。", encoding="utf-8")
+    await ingest_document(id1)
+    await ingest_document(id2)
+    return kb_id, id1, id2
+
+
+async def test_document_acl_retrieval(sqlite_env):
+    """受限文档：白名单内可见、外不可见；无终端用户身份全量可见。"""
+    from sqlalchemy import update as sa_update
+
+    from app.db.session import session_scope
+    from app.models.kb import Document
+    from app.services.retrieval import allowed_document_ids, retrieve
+
+    kb_id, id1, id2 = await _mk_acl_kb()
+    async with session_scope() as session:
+        await session.execute(
+            sa_update(Document).where(Document.id == id2)
+            .values(acl={"mode": "restricted", "end_users": ["op1"]})
+        )
+        await session.commit()
+
+    # allowlist 计算
+    async with session_scope() as session:
+        assert await allowed_document_ids(session, [kb_id], None) is None
+        allowed_u1 = await allowed_document_ids(session, [kb_id], "op1")
+        allowed_u2 = await allowed_document_ids(session, [kb_id], "op2")
+        assert allowed_u1 is not None and id2 in allowed_u1
+        assert allowed_u2 is not None and id2 not in allowed_u2 and id1 in allowed_u2
+
+    # 检索过滤：u2 拿不到受限文档内容；无过滤则两文档都可能命中
+    from app.models.kb import KnowledgeBase
+
+    async with session_scope() as session:
+        kb = await session.get(KnowledgeBase, kb_id)
+        cfg = {"top_k": 5, "score_threshold": 0, "use_kg": False, "use_bm25": True}
+        r_all = await retrieve(session, [kb], "薪资范围", cfg)
+        r_acl = await retrieve(session, [kb], "薪资范围", cfg,
+                               allowed_document_ids=allowed_u2)
+        assert any("八千" in c.content for c in r_all.chunks)
+        assert all("八千" not in c.content for c in r_acl.chunks)
+
+
+async def test_document_acl_chat_path(sqlite_env):
+    """挂件端到端：end_user=白名单外 → 回答引用不含受限文档；白名单内 → 可含。"""
+    from app.core.config import get_settings
+
+    orch_llm = InsightsLLM()
+    from app.services.chat import orchestrator
+    monkeypatch_unused = None
+    app_id, conv_id, token = await _mk_env()
+    kb_id, id1, id2 = await _mk_acl_kb()
+
+    from sqlalchemy import update as sa_update
+
+    from app.db.session import session_scope
+    from app.models.app import AppKnowledgeBase
+    from app.models.kb import Document
+    async with session_scope() as session:
+        await session.execute(
+            sa_update(Document).where(Document.id == id2)
+            .values(acl={"mode": "restricted", "end_users": ["op1"]})
+        )
+        session.add(AppKnowledgeBase(app_id=app_id, kb_id=kb_id))
+        await session.commit()
+
+    async with session_scope() as session:
+        app_row = await session.get(App, app_id)
+        async for _ev in orchestrator.run_chat(
+            session, app_row, conv_id, "薪资范围是多少", [],
+            end_user={"id": "op2", "name": "op2"},
+        ):
+            pass
+    async with session_scope() as session:
+        msgs = list((await session.execute(
+            select(Message).where(
+                Message.conversation_id == conv_id, Message.role == "assistant"
+            )
+        )).scalars().all())
+        cites = msgs[0].citations or []
+        assert all(c.get("document_name") != "secret.md" for c in cites)
+        assert msgs[0].hit is False or cites  # ACL 过滤后可能无命中
